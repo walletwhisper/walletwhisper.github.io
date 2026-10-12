@@ -69,16 +69,22 @@ flowchart LR
 ### Stack
 | Layer | Choice | Why |
 | :--- | :--- | :--- |
-| Backend | Python 3.12, FastAPI, SQLModel, SQLite | Easy CSV handling, no database server to set up, moves to Postgres later |
-| CSV parsing | stdlib `csv` + small helpers | Bank CSVs are small, and plain `csv` handles quirks better than guessing types |
-| Frontend | React + TypeScript + Vite + Tailwind | Fast dev loop; static build can be served by FastAPI |
-| Charts | Recharts | Built-in hover tooltips, `activeIndex`, and `onClick` on pie and bar charts |
-| Tests | pytest, Vitest, Playwright | Backend logic, component behavior, and 2 end-to-end flows |
+| Backend | Node.js (Express), TypeScript, SQLite (sql.js / better-sqlite3) | Zero setup, fast, embedded database, binds to 127.0.0.1 |
+| CSV parsing | csv-parse/sync | Reliable CSV parser, handles Chase trailing commas and disparate columns |
+| Frontend | React + TypeScript + Vite + Tailwind | Fast dev loop; static build served by Express in single process |
+| Charts | Recharts | Interactive Donut and Monthly Bar with hover tooltips and click filters |
+| Tests | Vitest + Supertest | Unit tests for parser/normalizer and integration tests for API invariants |
+
+### Storage & Privacy Rationale (Why SQLite vs. MySQL)
+- **Zero-Setup & Serverless**: Unlike MySQL, SQLite requires no background database daemon, root passwords, or port setup. It runs embedded inside the app.
+- **Single-File Portability**: All your historical transactions, categories, and custom rules are saved in one local file (`data/app.db`). Backing up your finances is as simple as copying this file to a USB drive.
+- **Air-Gapped Privacy**: Raw CSV statements are processed in memory and never permanently stored on disk. The server binds strictly to `127.0.0.1:8000` (localhost only). `.gitignore` protects `data/app.db` and all `*.csv` files from being committed to GitHub.
+- **Future Cloud Path**: Uses standard SQL schemas (`accounts`, `imports`, `transactions`, `categories`, `rules`). If moved to the cloud later, it migrates seamlessly to PostgreSQL or MySQL.
 
 ### Running locally
-- **Daily use:** `python run.py` builds the frontend if needed, starts FastAPI on `127.0.0.1:8000`, serves the React build, and opens the browser. **One process, one command.**
-- **Development:** `vite dev` (port 5173) proxies `/api` to FastAPI (port 8000).
-- **Privacy:** bind to `127.0.0.1` only. `.gitignore` includes `data/`, `*.db`, and `*.csv` (except `tests/fixtures/`).
+- **Daily use:** `npm start` runs `node run.js`, starts the server on `http://127.0.0.1:8000`, and automatically opens your browser. **One process, one command.**
+- **Testing:** `npm test` runs Vitest test suite.
+- **Development:** `npm run dev:server` (API) and `npm run dev:client` (Vite frontend with hot reload).
 
 ---
 
