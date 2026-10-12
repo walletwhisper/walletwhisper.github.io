@@ -1,4 +1,4 @@
-import { createServer } from './src/server.js';
+import { createServer } from './src/server.ts';
 import { exec } from 'child_process';
 
 const PORT = 8000;
