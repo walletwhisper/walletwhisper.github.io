@@ -1,6 +1,6 @@
 export type TransactionKind = 'spend' | 'refund' | 'income' | 'transfer' | 'fee';
 
-export type CategorySource = 'bank' | 'default_rule' | 'user_rule' | 'manual';
+export type CategorySource = 'bank' | 'default_rule' | 'user_rule' | 'manual' | 'ai';
 
 export interface ParsedRow {
   date: string; // YYYY-MM-DD

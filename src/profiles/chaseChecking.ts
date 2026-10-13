@@ -60,7 +60,9 @@ export const chaseCheckingProfile: BankProfile = {
       descUpper.includes('ONLINE TRANSFER') ||
       descUpper.includes('ZELLE TO') ||
       descUpper.includes('VENMO CASHOUT') ||
-      descUpper.includes('TRANSFER TO');
+      descUpper.includes('TRANSFER TO') ||
+      // Payments to other banks' credit cards (e.g. "CAPITAL ONE MOBILE PMT", "DISCOVER E-PAYMENT")
+      /\b(CAPITAL ONE|DISCOVER|CITI|CITIBANK|AMEX|AMERICAN EXPRESS|BANK OF AMERICA|BK OF AMER|BARCLAYCARD|BARCLAYS|SYNCHRONY|APPLECARD|APPLE CARD|GSBANK|WELLS FARGO CARD|US BANK|TD BANK)\b.*\b(PMT|PAYMENT|E-?PAYMENT|AUTOPAY|AUTO PAY|CRCARDPMT|ONLINE PMT|MOBILE PMT)\b/.test(descUpper);
 
     let kind: ParsedRow['kind'] = 'spend';
     let amountCents = 0;

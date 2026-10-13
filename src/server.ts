@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { getDb, saveDb } from './db.js';
 import { importCsvContent } from './importer.js';
+import { recategorizeWithLlm } from './llm.js';
 
 export async function createServer() {
   const app = express();
@@ -309,6 +310,32 @@ export async function createServer() {
 
       saveDb();
       res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 8. AI recategorization using the LLM key in .env
+  app.post('/api/ai/recategorize', async (req, res) => {
+    try {
+      const db = await getDb();
+      const result = await recategorizeWithLlm(db);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 9. Reset all data (wipe transactions, imports, accounts, user rules)
+  app.post('/api/reset', async (req, res) => {
+    try {
+      const db = await getDb();
+      db.run("DELETE FROM transactions");
+      db.run("DELETE FROM imports");
+      db.run("DELETE FROM accounts");
+      db.run("DELETE FROM rules WHERE source = 'user'");
+      saveDb();
+      res.json({ success: true, message: 'All transactions and imports have been reset.' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

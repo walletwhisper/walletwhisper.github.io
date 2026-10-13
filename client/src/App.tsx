@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import {
   Upload, DollarSign, TrendingUp, CreditCard,
-  Search, X, Check, Calendar
+  Search, X, Check, Calendar, Sparkles, Trash2
 } from 'lucide-react';
 
 interface CategoryItem {
@@ -67,6 +67,7 @@ export function App() {
 
   // UI state
   const [isUploading, setIsUploading] = useState(false);
+  const [isAiRunning, setIsAiRunning] = useState(false);
   const [uploadToast, setUploadToast] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -173,6 +174,44 @@ export function App() {
     }
   };
 
+  const handleAiRecategorize = async () => {
+    setIsAiRunning(true);
+    setUploadToast('✨ Sending transactions to Gemini AI for categorization...');
+    try {
+      const res = await fetch('/api/ai/recategorize', { method: 'POST' });
+      const data = await res.json();
+      if (data.error) {
+        setUploadToast(`AI error: ${data.error}`);
+      } else {
+        setUploadToast(`✨ AI recategorized ${data.changed} transactions (${data.unchanged} unchanged).`);
+        fetchSummary();
+        fetchTransactions();
+      }
+    } catch (err: any) {
+      setUploadToast(`AI error: ${err.message}`);
+    } finally {
+      setIsAiRunning(false);
+      setTimeout(() => setUploadToast(null), 6000);
+    }
+  };
+
+  const handleResetAll = async () => {
+    if (!window.confirm('Are you sure you want to delete all transactions and reset the dashboard? This cannot be undone.')) {
+      return;
+    }
+    try {
+      const res = await fetch('/api/reset', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setUploadToast('All data has been cleared.');
+        fetchSummary();
+        fetchTransactions();
+      }
+    } catch (err: any) {
+      setUploadToast(`Reset error: ${err.message}`);
+    }
+  };
+
   const handleCategorySelect = (entry: CategoryItem) => {
     if (selectedCategory?.id === entry.id) {
       setSelectedCategory(null);
@@ -246,10 +285,30 @@ export function App() {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={isUploading}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg font-medium text-sm transition shadow-sm cursor-pointer"
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg font-medium text-sm transition shadow-sm cursor-pointer disabled:opacity-50"
           >
             <Upload className="w-4 h-4" />
             {isUploading ? 'Importing...' : 'Import Bank CSVs'}
+          </button>
+
+          <button
+            onClick={handleAiRecategorize}
+            disabled={isAiRunning || isUploading}
+            className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-3.5 py-2 rounded-lg font-medium text-sm transition shadow-sm cursor-pointer disabled:opacity-50"
+            title="Categorize transactions using your Gemini API key"
+          >
+            <Sparkles className={`w-4 h-4 ${isAiRunning ? 'animate-spin' : ''}`} />
+            {isAiRunning ? 'Categorizing...' : 'AI Categorize'}
+          </button>
+
+          <button
+            onClick={handleResetAll}
+            disabled={isAiRunning || isUploading}
+            className="flex items-center gap-1.5 bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-300 border border-slate-700 hover:border-rose-700 px-3 py-2 rounded-lg font-medium text-xs transition cursor-pointer"
+            title="Remove all transactions and start fresh"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Reset Data
           </button>
         </div>
       </header>

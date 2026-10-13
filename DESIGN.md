@@ -415,8 +415,6 @@ flowchart TD
 | **3. Automated Monthly Executive Summary & Spike Alerts** | Upon importing a new month, the LLM analyzes trends and outputs 3–4 bullet points highlighting anomalies, category spikes, and notable shifts (e.g., *"Dining jumped 42% due to 5 DoorDash orders totaling $184"*). | Immediate awareness without hunting through transaction tables. |
 | **4. Hidden & Creeping Subscription Auditor** | Analyzes recurring billing intervals (monthly/annual) and flags price creep (e.g., internet bill rose from $65 to $80) and unused subscriptions. | Direct dollar savings by identifying forgotten recurring charges. |
 | **5. Actionable Budget Optimization ("Where Can I Cut?")** | Analyzes discretionary spending against savings goals and provides realistic, concrete recommendations (e.g., *"Cooking at home two more nights a week saves ~$220/month"*). | Practical coaching tailored to actual spending habits. |
-| **6. Universal / Unstructured Statement Ingestion** | Uses LLM structured output to parse arbitrary CSV formats or even PDF statement tables from unsupported banks into the unified transaction schema. | Any bank statement can be ingested immediately without building a dedicated profile. |
-
 ### 13.2 Privacy & Security Architecture for LLMs
 
 Because financial transactions are sensitive, the LLM layer adheres to strict privacy safeguards:
@@ -428,4 +426,82 @@ Because financial transactions are sensitive, the LLM layer adheres to strict pr
    - Supports both cloud APIs (OpenAI, Gemini, Anthropic via API keys stored locally in `.env`) and **Local Offline Models** (via Ollama running Llama 3 / Mistral locally with 0 bytes leaving the machine).
 3. **Deterministic Output & Grounding**:
    - LLMs are never allowed to fabricate transaction math. All calculations and aggregations are performed by SQLite, with the LLM acting as the natural-language interpreter and narrator.
+
+### 13.3 Conversational Financial Assistant & Visual Sync Engine ("Chat with Your Spending")
+
+Allows the user to ask natural-language questions (e.g., *"How much did I spend on dinner last week?"*, *"Show my largest recurring subscriptions"*, *"What did I spend at Amazon in July?"*) and receive both **grounded text answers** and **live dashboard visualization updates**.
+
+```mermaid
+flowchart TD
+    UserQuery["User Query: 'How much did I spend on dinner last week?'"]
+    ChatAPI["POST /api/chat"]
+    LLMIntent["Gemini / LLM: Extract Intent & Structured Filter"]
+    LocalSQL["SQLite Execution (Deterministic Math)"]
+    ResponseFormatter["Synthesize Response & Drill-Down Stats"]
+    VisualSync["Frontend Visual Sync: Filter Donut & Table"]
+
+    UserQuery --> ChatAPI
+    ChatAPI --> LLMIntent
+    LLMIntent -->|"{ category: 'Dining', dateFrom: '2026-10-05', dateTo: '2026-10-12' }"| LocalSQL
+    LocalSQL -->|"Exact total: $142.50 across 4 records"| ResponseFormatter
+    ResponseFormatter --> ChatAPI
+    ChatAPI -->|"Answer text + action: setFilter"| VisualSync
+```
+
+#### Grounded Execution Pipeline (Zero Hallucination Math)
+1. **Intent & Filter Extraction**: Gemini parses the natural language prompt into structured query filters using JSON schema:
+   - `category`: Target category (e.g. `Dining`, `Groceries`, `Utilities`) or `all`.
+   - `dateFrom` / `dateTo`: Concrete ISO dates calculated from relative terms like *"last week"*, *"August 2025"*, or *"this year"*.
+   - `merchant`: Optional merchant string match (e.g. `Amazon`, `Uber`).
+   - `kind`: `spend`, `income`, `transfer`, or `all`.
+2. **Deterministic SQLite Aggregation**: The backend queries SQLite using parameterized SQL. Totals, averages, and transaction lists are computed in pure SQL, ensuring 100% exact math down to the cent.
+3. **Dual Output (Narrative + Visual Action)**:
+   - **Narrative**: Friendly explanation with bullet points of top items.
+   - **Action**: `{ action: "SET_FILTER", categoryId: 2, from: "2026-10-05", to: "2026-10-12" }` transmitted to React state.
+4. **Live Visual Synchronization**: The Donut Chart highlights the selected category slice, the date picker selects the requested timeframe, and the transaction table scrolls to display the exact supporting receipts.
+
+---
+
+## 14. Data Lifecycle & Statement Management
+
+Provides granular visibility and control over imported data so users can audit, selectively remove, or rollback statements without losing hand-curated rules or unrelated data.
+
+```
++---------------------------------------------------------------+
+|  Manage Imported Data                                    [X]  |
++---------------------------------------------------------------+
+|  Chase1234_Activity_20261011.csv                              |
+|  Imported Oct 12, 2026 • 35 transactions • Chase Credit       |
+|  [ View Records ]                      [ 🗑️ Delete Statement ]|
++---------------------------------------------------------------+
+|  ChaseChecking_Sept2025.csv                                   |
+|  Imported Oct 12, 2026 • 120 transactions • Chase Checking    |
+|  [ View Records ]                      [ 🗑️ Delete Statement ]|
++---------------------------------------------------------------+
+|  Bulk Operations:                                             |
+|  [ Prune by Date Range... ]             [ ⚠️ Reset All Data ] |
++---------------------------------------------------------------+
+```
+
+### 14.1 Capabilities
+1. **Statement Rollback (`DELETE /api/imports/:id`)**:
+   - Deletes the specific import metadata and cascadingly purges only transactions tagged with that `import_id`.
+   - Preserves manual edits and rules applied to other statements.
+2. **Import History Drawer**:
+   - Modal accessible via the top navbar displaying filename, date uploaded, bank profile, rows added, and duplicate rows skipped.
+3. **Date-Range Pruning (`DELETE /api/transactions?from=...&to=...`)**:
+   - Allows users to selectively purge older statement periods (e.g., *"Delete all records prior to 2024"*).
+4. **Emergency Clean-Slate (`POST /api/reset`)**:
+   - Wipes all transactions, accounts, and imports while keeping default taxonomies and system rules intact.
+
+---
+
+## 15. Implementation Plan & Priority Roadmap
+
+| Phase | Feature | Components Affected | Value Delivered |
+| :--- | :--- | :--- | :--- |
+| **Phase 1: Data Management Drawer** | Statement auditing, 1-click delete/undo per statement, date pruning | `server.ts` (`/api/imports`, `/api/imports/:id`), `App.tsx` (Imports Drawer) | Full control over imported files; easily delete unwanted statements without resetting the whole app. |
+| **Phase 2: Conversational Query API** | Text-to-Intent translation, deterministic SQLite runner, `/api/chat` | `server.ts`, `llm.ts`, Gemini API | Answers natural-language spending questions with zero calculation hallucinations. |
+| **Phase 3: Interactive Chat Assistant & Visual Sync** | Slide-out chat drawer, prompt suggestion chips, live chart/table filters | `App.tsx` (Chat Drawer, Recharts integration) | Ask questions in plain English and watch the charts and tables dynamically morph to show the answer. |
+
 

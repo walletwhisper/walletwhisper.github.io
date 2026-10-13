@@ -6,6 +6,13 @@ export interface ClassificationResult {
   categorySource: 'manual' | 'user_rule' | 'default_rule' | 'bank' | 'uncategorized';
 }
 
+/** True if `keyword` appears in `text` as a whole word/phrase (not inside another word). */
+export function matchesWholeWord(text: string, keyword: string): boolean {
+  if (!keyword) return false;
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`, 'i').test(text);
+}
+
 /**
  * Classify a transaction using the priority hierarchy:
  * 1. Transfers (kind === 'transfer') -> 'Transfer' category
@@ -55,13 +62,13 @@ export function classifyTransaction(
   }
 
   // 3. Default rules (priority = 1)
+  // Whole-word match only (e.g. "mobil" must not match "Mobile"), longest keyword first
   const defaultRules = db.exec(
-    "SELECT pattern, category_id FROM rules WHERE source = 'default'"
+    "SELECT pattern, category_id FROM rules WHERE source = 'default' ORDER BY LENGTH(pattern) DESC"
   );
   if (defaultRules.length > 0 && defaultRules[0].values.length > 0) {
     for (const [pattern, catId] of defaultRules[0].values) {
-      const p = (pattern as string).toLowerCase();
-      if (merchantLower.includes(p)) {
+      if (matchesWholeWord(merchantLower, (pattern as string).toLowerCase())) {
         return { categoryId: catId as number, categorySource: 'default_rule' };
       }
     }
