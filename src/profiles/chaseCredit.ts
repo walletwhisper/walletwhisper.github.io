@@ -1,4 +1,5 @@
 import { BankProfile, ParsedRow } from '../types.js';
+import { chaseLast4, field, parseAmount, parseUsDate, toCents } from './common.js';
 
 /**
  * Chase Credit Card Profile
@@ -6,12 +7,12 @@ import { BankProfile, ParsedRow } from '../types.js';
  *
  * Rules:
  * - Date: Transaction Date (MM/DD/YYYY -> YYYY-MM-DD)
- * - Amount sign: In Chase Credit export, charges/purchases are negative (e.g. -78.45).
+ * - Amount sign: charges are negative (-78.45), payments/returns positive.
  *   We invert so positive = spend (7845 cents).
  * - Type:
  *   - 'Sale': 'spend'
  *   - 'Return': 'refund' (amountCents is negative so it nets out category total)
- *   - 'Payment': 'transfer' (excluded from spending charts)
+ *   - 'Payment': 'transfer' (money arriving from the account that paid the bill)
  *   - 'Fee' / 'Adjustment': 'fee'
  */
 export const chaseCreditProfile: BankProfile = {
@@ -21,64 +22,33 @@ export const chaseCreditProfile: BankProfile = {
 
   matches(headers: string[]): boolean {
     const normalized = headers.map(h => h.trim().toLowerCase());
-    const required = [
-      'transaction date',
-      'post date',
-      'description',
-      'category',
-      'type',
-      'amount'
-    ];
+    const required = ['transaction date', 'post date', 'description', 'category', 'type', 'amount'];
     return required.every(req => normalized.includes(req));
   },
 
+  last4FromFilename: chaseLast4,
+
   parseRow(row: Record<string, string>): ParsedRow | null {
-    const rawDate = row['Transaction Date'] || row['transaction date'] || '';
-    const rawDesc = row['Description'] || row['description'] || '';
-    const rawAmount = row['Amount'] || row['amount'] || '';
-    const rawType = (row['Type'] || row['type'] || '').trim().toLowerCase();
-    const bankCategory = row['Category'] || row['category'] || undefined;
+    const date = parseUsDate(field(row, 'Transaction Date'));
+    const amount = parseAmount(field(row, 'Amount'));
+    if (!date || amount === null) return null;
 
-    if (!rawDate || !rawAmount) return null;
-
-    // Parse date MM/DD/YYYY to YYYY-MM-DD
-    const dateParts = rawDate.split('/');
-    if (dateParts.length !== 3) return null;
-    const [month, day, year] = dateParts;
-    const isoDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-
-    // Parse amount to cents
-    const parsedNum = parseFloat(rawAmount.replace(/[$,]/g, ''));
-    if (isNaN(parsedNum)) return null;
-
-    // In Chase credit: charges are negative, payments/returns are positive
-    // When spend: -78.45 -> positive 7845 cents
-    let kind: ParsedRow['kind'] = 'spend';
-    let amountCents = Math.round(-parsedNum * 100);
+    const rawDescription = field(row, 'Description').trim();
+    const rawType = field(row, 'Type').trim().toLowerCase();
+    const bankCategory = field(row, 'Category').trim() || undefined;
+    const direction = amount > 0 ? 'in' : 'out';
 
     if (rawType === 'payment') {
-      kind = 'transfer';
-      amountCents = Math.round(Math.abs(parsedNum) * 100);
-    } else if (rawType === 'return') {
-      kind = 'refund';
-      // Returns reduce category spending: represented as negative cents
-      amountCents = -Math.round(Math.abs(parsedNum) * 100);
-    } else if (rawType === 'fee' || rawType === 'adjustment') {
-      kind = 'fee';
-      amountCents = Math.round(Math.abs(parsedNum) * 100);
-    } else {
-      kind = 'spend';
-      // If parsedNum was negative (-50), amountCents is +5000
-      // If parsedNum was positive (unusual for sale), keep sign consistent
-      amountCents = Math.round(-parsedNum * 100);
+      return { date, rawDescription, amountCents: toCents(Math.abs(amount)), kind: 'transfer', direction, bankCategory };
     }
-
-    return {
-      date: isoDate,
-      rawDescription: rawDesc.trim(),
-      amountCents,
-      kind,
-      bankCategory: bankCategory?.trim() || undefined,
-    };
+    if (rawType === 'return') {
+      // Returns reduce category spending: represented as negative cents
+      return { date, rawDescription, amountCents: -toCents(Math.abs(amount)), kind: 'refund', direction, bankCategory };
+    }
+    if (rawType === 'fee' || rawType === 'adjustment') {
+      return { date, rawDescription, amountCents: toCents(Math.abs(amount)), kind: 'fee', direction, bankCategory };
+    }
+    // Sale: -50 -> +5000 cents. A positive "sale" keeps a consistent (negative) sign.
+    return { date, rawDescription, amountCents: toCents(-amount), kind: 'spend', direction, bankCategory };
   }
 };

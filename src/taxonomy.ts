@@ -107,16 +107,44 @@ export const DEFAULT_CATEGORIES: DefaultCategoryDef[] = [
     keywords: ['fee', 'service charge', 'annual fee', 'interest charge', 'late fee']
   },
   {
+    name: 'Kids',
+    color: '#FB7185', // rose
+    isSystem: true,
+    keywords: ['daycare', 'childcare', 'kindercare', 'tutoring']
+  },
+  {
+    name: 'Insurance',
+    color: '#0EA5E9', // sky
+    isSystem: true,
+    keywords: ['insurance', 'geico', 'progressive', 'state farm', 'allstate', 'liberty mutual']
+  },
+  {
+    name: 'Gifts & Donations',
+    color: '#D946EF', // fuchsia
+    isSystem: true,
+    keywords: ['donation', 'charity', 'gofundme']
+  },
+  {
+    // Assigned by the transfer matcher to payments for cards we never import
+    name: 'Credit card (untracked)',
+    color: '#78716C', // stone
+    isSystem: true,
+    keywords: []
+  },
+  {
+    // Assigned from kind = transfer, never by keyword: a keyword such as "payment"
+    // would put real spending like "Venmo payment" into Transfer
     name: 'Transfer',
     color: '#64748B', // slate
     isSystem: true,
-    keywords: ['transfer', 'payment', 'autopay', 'card payment', 'credit crd']
+    keywords: []
   },
   {
+    // Assigned from kind = income, never by keyword
     name: 'Income',
     color: '#22C55E', // green
     isSystem: true,
-    keywords: ['payroll', 'direct dep', 'salary', 'bonus', 'dividend', 'interest payment']
+    keywords: []
   },
   {
     name: 'Uncategorized',
@@ -140,5 +168,5 @@ export const CHASE_CATEGORY_MAP: Record<string, string> = {
   'home': 'Housing',
   'personal': 'Shopping',
   'professional services': 'Utilities',
-  'gifts & donations': 'Shopping'
+  'gifts & donations': 'Gifts & Donations'
 };

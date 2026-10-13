@@ -1,15 +1,17 @@
 import fs from 'fs';
 import path from 'path';
-import { Database } from 'sql.js';
-import { saveDb } from './db.js';
+import type { Db } from './db.js';
 
 /**
  * LLM Recategorization (Gemini):
  * Sends sanitized, de-duplicated transactions to the configured LLM and applies
- * its category suggestions. Manual edits and user rules are never touched.
+ * its category suggestions. Manual edits and user rules are never touched, and the AI
+ * only picks spending categories: whether a row is a transfer or income is decided by the
+ * transfer matcher and by us in the review inbox, never by the AI.
  *
- * Privacy: only a cleaned description (long IDs/reference numbers stripped),
- * account type, direction, and amount are sent. No account numbers, balances, or fingerprints.
+ * Privacy: only a cleaned description (long IDs/reference numbers stripped), account type,
+ * amount, and the bank's own category are sent, once per distinct description.
+ * No account numbers, balances, dates, people, or fingerprints.
  */
 
 interface LlmConfig {
@@ -123,132 +125,90 @@ async function callGemini(cfg: LlmConfig, prompt: string, categoryNames: string[
 }
 
 function buildPrompt(items: object[], categoryNames: string[]): string {
-  return `You categorize personal bank transactions for a spending tracker.
+  return `You categorize personal credit card and bank purchases for a spending tracker.
 
 Allowed categories: ${categoryNames.join(', ')}
 
 Rules:
-- "Transfer" = money moved between the user's own accounts, including paying ANY credit card bill
-  (e.g. "CAPITAL ONE MOBILE PMT", "DISCOVER E-PAYMENT", "CITI AUTOPAY", "AMEX EPAYMENT"), savings transfers,
-  brokerage/investment transfers, and Venmo/Zelle cash-outs to self. Transfers are excluded from spending.
-- "Income" = payroll, direct deposit, salary, interest, dividends, tax refunds. Only for money coming IN.
-- Pick the most specific spending category for purchases. Gas stations -> Gas; groceries -> Groceries;
-  restaurants, coffee, food delivery -> Dining; rideshare, transit, parking, tolls -> Transport;
-  phone/internet/electric/water -> Utilities; rent/mortgage -> Housing; streaming/software -> Subscriptions.
+- Every item is money spent (or a refund of a purchase). Pick the most specific spending category.
+- Gas stations -> Gas; groceries -> Groceries; restaurants, coffee, food delivery -> Dining;
+  rideshare, transit, parking, tolls -> Transport; phone/internet/electric/water -> Utilities;
+  rent/mortgage/HOA -> Housing; streaming/software -> Subscriptions; insurance premiums -> Insurance;
+  daycare, school fees, kids' activities -> Kids; charities -> Gifts & Donations.
 - Use "Uncategorized" only if you genuinely cannot tell.
 
-Each item has: id, description, account (checking/credit), flow (money_out / money_in), amountUSD, bankCategory (may be empty).
+Each item has: id, description, account (checking/credit), amountUSD, bankCategory (may be empty).
 Return one result per id.
 
 Items:
 ${JSON.stringify(items)}`;
 }
 
-export async function recategorizeWithLlm(db: Database): Promise<AiRecategorizeResult> {
+/** Categories the AI may choose: spending categories only. */
+const NOT_FOR_AI = new Set(['Transfer', 'Income', 'Credit card (untracked)']);
+
+export async function recategorizeWithLlm(db: Db): Promise<AiRecategorizeResult> {
   const cfg = getConfig();
 
-  // Categories
-  const catRows = db.exec('SELECT id, name FROM categories')[0]?.values || [];
-  const nameToId = new Map<string, number>();
-  const idToName = new Map<number, string>();
-  for (const [id, name] of catRows) {
-    nameToId.set(name as string, id as number);
-    idToName.set(id as number, name as string);
-  }
-  const categoryNames = [...nameToId.keys()];
+  const cats = db.prepare('SELECT id, name FROM categories').all() as { id: number; name: string }[];
+  const nameToId = new Map(cats.map(c => [c.name, c.id]));
+  const idToName = new Map(cats.map(c => [c.id, c.name]));
+  const categoryNames = cats.map(c => c.name).filter(n => !NOT_FOR_AI.has(n));
 
-  // Transactions eligible for AI: never touch manual edits or user rules
-  const txRows = db.exec(`
-    SELECT t.id, t.txn_date, t.raw_description, t.merchant, t.amount_cents, t.kind,
-           t.category_id, t.bank_category, a.account_type
-    FROM transactions t
-    JOIN accounts a ON t.account_id = a.id
-    WHERE t.category_source NOT IN ('manual', 'user_rule')
-  `)[0]?.values || [];
+  // Spending rows only; never touch manual edits, user rules, or rows tied to an untracked card
+  const txs = db.prepare(`
+    SELECT t.id, t.txn_date AS date, t.raw_description AS raw, t.merchant, t.amount_cents AS cents,
+           t.category_id AS categoryId, COALESCE(t.bank_category, '') AS bankCategory, a.account_type AS account
+    FROM transactions t JOIN accounts a ON t.account_id = a.id
+    WHERE t.kind IN ('spend', 'fee', 'refund')
+      AND t.category_source NOT IN ('manual', 'user_rule')
+      AND t.counterparty_account_id IS NULL
+  `).all() as { id: number; date: string; raw: string; merchant: string; cents: number;
+               categoryId: number; bankCategory: string; account: string }[];
 
-  type Tx = {
-    id: number; date: string; raw: string; merchant: string; cents: number;
-    kind: string; categoryId: number; bankCategory: string; account: string;
-  };
-  const txs: Tx[] = txRows.map(v => ({
-    id: v[0] as number, date: v[1] as string, raw: v[2] as string, merchant: v[3] as string,
-    cents: v[4] as number, kind: v[5] as string, categoryId: v[6] as number,
-    bankCategory: (v[7] as string) || '', account: v[8] as string
-  }));
-
-  // Group identical-looking transactions so each unique merchant is sent once
-  const groups = new Map<string, Tx[]>();
+  // Group identical-looking transactions so each distinct description is sent once
+  const groups = new Map<string, typeof txs>();
   for (const t of txs) {
-    const desc = sanitizeDescription(t.raw);
-    const flow = t.kind === 'income' || t.kind === 'refund' ? 'in' : 'out';
-    const key = `${t.account}|${flow}|${desc.toLowerCase()}`;
+    const key = `${t.account}|${sanitizeDescription(t.raw).toLowerCase()}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(t);
   }
   const groupList = [...groups.values()];
 
-  // Ask the LLM in batches
   const suggestions = new Map<number, string>(); // group index -> category name
   const BATCH = 80;
   for (let start = 0; start < groupList.length; start += BATCH) {
     const slice = groupList.slice(start, start + BATCH);
-    const items = slice.map((g, i) => {
-      const t = g[0];
-      return {
-        id: start + i,
-        description: sanitizeDescription(t.raw) || t.merchant,
-        account: t.account,
-        flow: t.kind === 'income' || t.kind === 'refund' ? 'money_in' : 'money_out',
-        amountUSD: Math.abs(t.cents) / 100,
-        bankCategory: t.bankCategory
-      };
-    });
+    const items = slice.map((g, i) => ({
+      id: start + i,
+      description: sanitizeDescription(g[0].raw) || g[0].merchant,
+      account: g[0].account,
+      amountUSD: Math.abs(g[0].cents) / 100,
+      bankCategory: g[0].bankCategory
+    }));
     const results = await callGemini(cfg, buildPrompt(items, categoryNames), categoryNames);
     for (const r of results) {
-      if (nameToId.has(r.category)) suggestions.set(r.id, r.category);
+      if (categoryNames.includes(r.category)) suggestions.set(r.id, r.category);
     }
   }
 
-  // Apply suggestions conservatively
   const changes: AiChange[] = [];
   let unchanged = 0;
   let skipped = 0;
-  const spendKinds = new Set(['spend', 'fee', 'refund']);
+  const update = db.prepare("UPDATE transactions SET category_id = ?, category_source = 'ai' WHERE id = ?");
 
-  groupList.forEach((group, idx) => {
-    const suggested = suggestions.get(idx);
-    if (!suggested) { skipped += group.length; return; }
-    const newCatId = nameToId.get(suggested)!;
-
-    for (const t of group) {
-      let newKind = t.kind;
-      if (suggested === 'Transfer') {
-        newKind = 'transfer';
-      } else if (suggested === 'Income') {
-        if (t.kind !== 'income') { skipped++; continue; }
-      } else if (!spendKinds.has(t.kind)) {
-        // Don't turn transfers/income into spending automatically
-        skipped++;
-        continue;
+  db.transaction(() => {
+    groupList.forEach((group, idx) => {
+      const suggested = suggestions.get(idx);
+      if (!suggested) { skipped += group.length; return; }
+      const newCatId = nameToId.get(suggested)!;
+      for (const t of group) {
+        if (newCatId === t.categoryId) { unchanged++; continue; }
+        update.run(newCatId, t.id);
+        changes.push({ date: t.date, merchant: t.merchant, amountCents: t.cents, from: idToName.get(t.categoryId) || '?', to: suggested });
       }
-
-      if (newCatId === t.categoryId && newKind === t.kind) { unchanged++; continue; }
-
-      db.run(
-        "UPDATE transactions SET category_id = ?, kind = ?, category_source = 'ai' WHERE id = ?",
-        [newCatId, newKind, t.id]
-      );
-      changes.push({
-        date: t.date,
-        merchant: t.merchant,
-        amountCents: t.cents,
-        from: idToName.get(t.categoryId) || '?',
-        to: suggested
-      });
-    }
-  });
-
-  saveDb();
+    });
+  })();
 
   return {
     reviewed: txs.length,
