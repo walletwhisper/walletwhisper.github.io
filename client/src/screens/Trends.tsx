@@ -3,7 +3,7 @@ import type { Trends as TrendsData } from '../api';
 import { qs } from '../api';
 import { useFetch, useStore } from '../store';
 import { formatCents, monthLabel, shortMoney, shortMonth, useRoute } from '../lib';
-import { Card, Chip, Dot, Empty, inputClass } from '../ui';
+import { Card, Chip, Dot, Empty, Segmented, inputClass, tooltipClass } from '../ui';
 
 const STACKS = [
   { id: 'category', label: 'Category' },
@@ -49,21 +49,14 @@ export function Trends() {
         subtitle="Click a bar segment to see those transactions · faded bars are months with missing statements"
         actions={
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-slate-400">Stack by</span>
-            <div className="flex rounded-lg overflow-hidden border border-slate-600">
-              {STACKS.map(s => (
-                <button key={s.id} onClick={() => set({ stack: s.id })}
-                  className={`px-3 py-1.5 cursor-pointer ${stack === s.id ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
-                  {s.label}
-                </button>
-              ))}
-            </div>
+            <span className="text-muted">Stack by</span>
+            <Segmented options={STACKS} value={stack} onChange={id => set({ stack: id })} />
             <select className={inputClass} value={months} onChange={e => set({ months: e.target.value })}>
               <option value="6">6 months</option>
               <option value="12">12 months</option>
               <option value="24">24 months</option>
             </select>
-            <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer">
+            <label className="flex items-center gap-1.5 text-ink-2 cursor-pointer">
               <input type="checkbox" checked={includeOneTime} onChange={e => set({ onetime: e.target.checked ? '1' : '' })} />
               Include one-time items
             </label>
@@ -81,23 +74,23 @@ export function Trends() {
           <div className="h-96">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={rows} margin={{ left: 8, right: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-                <XAxis dataKey="month" tickFormatter={shortMonth} stroke="#94a3b8" fontSize={11} />
-                <YAxis tickFormatter={shortMoney} stroke="#94a3b8" fontSize={11} width={56} />
-                <Tooltip cursor={{ fill: '#33415555' }} content={({ active, payload, label }) => {
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e5ea" vertical={false} />
+                <XAxis dataKey="month" tickFormatter={shortMonth} stroke="#8e8e93" fontSize={11} tickLine={false} axisLine={false} />
+                <YAxis tickFormatter={shortMoney} stroke="#8e8e93" fontSize={11} width={56} tickLine={false} axisLine={false} />
+                <Tooltip cursor={{ fill: 'rgba(0,0,0,0.04)' }} content={({ active, payload, label }) => {
                   if (!active || !payload?.length) return null;
                   const m = payload[0].payload as (typeof rows)[number];
                   return (
-                    <div className="bg-slate-900 border border-slate-600 px-3 py-2 rounded-lg shadow-xl text-xs min-w-48">
-                      <p className="font-semibold text-white">{monthLabel(String(label))}{!m.complete && <span className="text-amber-300"> · incomplete</span>}</p>
-                      <p className="text-slate-200 mb-1">{formatCents(m.totalCents)}</p>
+                    <div className={`${tooltipClass} min-w-48`}>
+                      <p className="font-semibold text-ink">{monthLabel(String(label))}{!m.complete && <span className="text-warn"> · incomplete</span>}</p>
+                      <p className="text-ink mb-1">{formatCents(m.totalCents)}</p>
                       {[...payload].reverse().filter(p => Number(p.value) > 0).map(p => (
-                        <p key={String(p.dataKey)} className="flex justify-between gap-4 text-slate-300">
+                        <p key={String(p.dataKey)} className="flex justify-between gap-4 text-ink-2">
                           <span className="flex items-center gap-1.5"><Dot color={String(p.color)} />{p.name}</span>
                           <span className="font-mono">{formatCents(Number(p.value))}</span>
                         </p>
                       ))}
-                      {!includeOneTime && m.oneTimeCents > 0 && <p className="text-slate-400 mt-1">+ {formatCents(m.oneTimeCents)} one-time (hidden)</p>}
+                      {!includeOneTime && m.oneTimeCents > 0 && <p className="text-muted mt-1">+ {formatCents(m.oneTimeCents)} one-time (hidden)</p>}
                     </div>
                   );
                 }} />
@@ -114,14 +107,14 @@ export function Trends() {
         {data && (
           <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-xs">
             {data.series.map(s => (
-              <span key={s.key} className="flex items-center gap-1.5 text-slate-300">
-                <Dot color={s.color} />{s.name} <span className="text-slate-500 font-mono">{formatCents(s.totalCents)}</span>
+              <span key={s.key} className="flex items-center gap-1.5 text-ink-2">
+                <Dot color={s.color} />{s.name} <span className="text-muted font-mono">{formatCents(s.totalCents)}</span>
               </span>
             ))}
           </div>
         )}
         {!includeOneTime && oneTimeTotal > 0 && (
-          <p className="mt-3 text-xs text-slate-400">
+          <p className="mt-3 text-xs text-muted">
             {formatCents(oneTimeTotal)} of one-time items are hidden so they don't swamp the normal pattern.
           </p>
         )}

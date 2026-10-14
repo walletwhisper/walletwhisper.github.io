@@ -1,57 +1,82 @@
-# Financial Characterizer & Spending Visualizer
+# WalletWhisper
 
-A local-first, interactive spending visualizer designed to import bank CSV statements (Chase Credit & Checking first, easily scalable to BoA, Santander, TD Bank, Discover, Citi, and Capital One), normalize transactions, automatically categorize spending, and provide interactive drill-down charts.
+**See where your household's money goes, without giving your bank data to anyone.**
+
+WalletWhisper turns the CSV statements you download from your banks into one clear picture of your spending: by month, by category, by person, and by account. It runs entirely on your own computer.
+
+> ## 🔒 Your financial data never leaves your computer
+>
+> - **There is no WalletWhisper server and no account to sign up for.** You download the program from GitHub and run it on your own machine. GitHub only hosts the code; your statements never go there.
+> - **Everything is stored in one local file:** `data/app.db` inside the folder where you installed the app. Automatic backups go to `data/backups/`. Both folders are git-ignored, so they can't be committed by accident.
+> - **Only your computer can open the app.** It listens on `127.0.0.1` (localhost), so other devices on your network can't reach it. It also refuses requests from other websites open in your browser.
+> - **No analytics, no tracking, no cookies, no external fonts or scripts.**
+> - **AI is optional and off by default.** See [Optional: AI categories](#optional-ai-categories) for exactly what is sent if you turn it on.
+>
+> To delete everything, use **Accounts → Reset all data** in the app, or delete the `data/` folder. To move to a new computer, copy the `data/` folder.
 
 ---
 
 ## Features
 
-- **Multi-Bank Ingestion Pipeline**: Auto-detects statement headers without manual column mapping.
-- **Transfers & Card Payment Exclusion**: Autopay and card payments are categorized as transfers and excluded from spending totals to prevent double-counting.
-- **Refund Netting**: Credit returns (e.g. Amazon refunds) reduce the respective category total rather than inflating income.
-- **Deduplication Guard**: Robust occurrence-indexed SHA-256 fingerprinting prevents double-counting when overlapping monthly statements are uploaded, while preserving legitimate same-day identical transactions.
-- **Merchant Beautifier**: Strips POS terminal numbers, payment gateway prefixes (`SQ *`, `TST*`), and location junk.
-- **Interactive Visualizations**:
-  - **Donut Chart**: Hover to view category percentage and dollar amount; click any slice to filter the table.
-  - **Monthly Trend Bar Chart**: Click a month bar to filter transactions to that month.
-  - **KPI Cards**: Real-time spending total, money in (income), top category, and record count.
-- **Inline Recategorization & 1-Click Rule Learning**: Fix a category directly in the table and check *"Always categorize [Merchant] as [Category]"* to apply retroactively and to future imports. Hand-edited categories are protected from being overwritten.
-- **Single Process Localhost**: Runs locally at `http://127.0.0.1:8000` with zero cloud leakage.
+- **Many banks, one view.** Import CSVs from checking and credit card accounts. The bank format is detected automatically (Chase checking and credit today; more banks are planned).
+- **Every dollar counted once.**
+  - Card payments and transfers between your own accounts are matched automatically and left out of spending.
+  - Re-importing an overlapping statement never creates duplicate rows.
+  - Anything ambiguous lands in a short **Review** list for you to answer once.
+- **See it visually.**
+  - A monthly overview with a category donut and "biggest changes vs. your typical month".
+  - Stacked trends by category, person or account. Months with missing statements are flagged.
+- **Who spent what.** Mark any transaction with a household member, select many rows at once, or set a default person per account.
+- **One-time items** (a house closing, a big wire) are kept separate, so they don't distort your normal monthly pattern.
+- **Undo and backups.**
+  - Undo any import.
+  - Reset asks you to type a confirmation.
+  - A backup is saved automatically before any destructive action.
 
----
+## Getting started
 
-## Quick Start
+You need [Node.js](https://nodejs.org) 20 or newer.
 
-### 1. Start the Application
-Run one command from the project root:
 ```bash
-npm start
+git clone https://github.com/XiaoLiu8811/financialTool.git walletwhisper
+cd walletwhisper
+npm install      # installs the server and the web interface
+npm start        # builds the interface and opens http://127.0.0.1:8000
 ```
-This starts the local server at `http://127.0.0.1:8000` and automatically opens your browser.
 
-Optional AI categorization: copy `.env.example` to `.env` and add your API key.
+Then download CSV statements from your bank's website and drop them onto the page, or click **Import**.
 
-### Your data stays on your computer
-Your database (`data/`), backups, bank CSV exports and `.env` (API keys) are all git-ignored and are never committed. The only CSVs in the repo are the made-up samples in `tests/fixtures/`.
+### Optional: AI categories
 
-A privacy check runs automatically before every `git commit` and `git push` (hooks in `.githooks/`, switched on by `npm install`). It blocks:
+WalletWhisper categorizes transactions with built-in rules and your own corrections, so you don't need AI. If you'd like AI suggestions for unclear merchants:
+
+1. Copy `.env.example` to `.env`.
+2. Paste your own Google Gemini API key into it. `.env` is git-ignored.
+3. Press **AI categorize** on the Transactions screen.
+
+What gets sent to Google, only when you press the button:
+- **Sent:** cleaned merchant descriptions with reference numbers stripped, the amount, the bank's own category, and whether the account is checking or credit.
+- **Never sent:** account numbers, balances, dates, people, or file names.
+
+The AI can only suggest a spending category. It never decides what is a transfer or income, and it never overrides a choice you made.
+
+## For developers
+
+```bash
+npm test             # engine + API tests (use an in-memory database, never your real data)
+npm run dev:server   # backend with reload
+npm run dev:client   # frontend with hot reload (Vite)
+```
+
+Design notes: [DESIGN.md](DESIGN.md).
+
+### Privacy guard for contributors
+
+A privacy check runs automatically before every `git commit` and `git push`. The hooks live in `.githooks/` and are switched on by `npm install`. It blocks:
 - databases, backups, `.env` and bank exports;
 - API keys, including the actual key values in your `.env`;
 - your own account numbers and household names, read from your local database.
 
 To block other words, such as your address or employer, list them one per line in `.privacy-blocklist`, which is itself git-ignored. Run `npm run privacy-check` to scan every file and the full history. The same check also runs on GitHub (`.github/workflows/privacy-check.yml`).
 
-### 2. Run the Automated Tests
-```bash
-npm test
-```
-
-### 3. Development Mode
-To develop backend and frontend with live reloading:
-```bash
-# Terminal 1: Backend
-npm run dev:server
-
-# Terminal 2: Frontend
-npm run dev:client
-```
+Test data in `tests/fixtures/` is made up. Never add real statements to the repo.

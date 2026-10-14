@@ -1,4 +1,5 @@
 import { createServer } from './src/server.ts';
+import { dbPath } from './src/db.ts';
 import { exec } from 'child_process';
 
 const PORT = 8000;
@@ -8,7 +9,8 @@ async function start() {
   app.listen(PORT, '127.0.0.1', () => {
     const url = `http://127.0.0.1:${PORT}`;
     console.log(`\n======================================================`);
-    console.log(` Spending Analyzer is running at: ${url}`);
+    console.log(` WalletWhisper is running at: ${url}`);
+    console.log(` Your data stays on this computer: ${dbPath()}`);
     console.log(`======================================================\n`);
 
     // Auto-open browser on Windows/macOS/Linux

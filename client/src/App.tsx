@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { DollarSign, Upload, X } from 'lucide-react';
+import { Lock, Upload, X } from 'lucide-react';
 import clsx from 'clsx';
 import type { Summary } from './api';
 import { StoreProvider, useFetch, useStore } from './store';
@@ -11,6 +11,8 @@ import { Trends } from './screens/Trends';
 import { Transactions } from './screens/Transactions';
 import { Review } from './screens/Review';
 import { Accounts } from './screens/Accounts';
+import { About } from './screens/About';
+import { Segmented } from './ui';
 
 const NAV: { id: Screen; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -57,58 +59,80 @@ function Shell() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans pb-16">
-      <header className="border-b border-slate-800 bg-slate-900/95 backdrop-blur sticky top-0 z-40 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="bg-indigo-600 p-2 rounded-lg text-white"><DollarSign className="w-5 h-5" /></div>
-          <h1 className="text-lg font-bold tracking-tight text-white">Spending Analyzer</h1>
-        </div>
-        <nav className="flex flex-wrap gap-1 text-sm order-3 sm:order-2 w-full sm:w-auto">
-          {NAV.map(n => (
-            <button key={n.id} onClick={() => navigate(n.id)}
-              className={clsx('px-3 py-1.5 rounded-lg cursor-pointer flex items-center gap-1.5',
-                screen === n.id ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800')}>
-              {n.label}
-              {n.id === 'review' && reviewCount > 0 && (
-                <span className="bg-amber-500 text-slate-900 text-[10px] font-bold rounded-full px-1.5 min-w-5 text-center">{reviewCount}</span>
-              )}
-            </button>
-          ))}
+    <div className="min-h-screen bg-page text-ink font-sans flex flex-col">
+      <header className="sticky top-0 z-40 bg-white/70 backdrop-blur-xl backdrop-saturate-[1.8] border-b border-black/10 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+        <button onClick={() => navigate('overview')} className="flex items-center gap-2.5 cursor-pointer">
+          <Logo />
+          <h1 className="text-[21px] font-bold tracking-[-0.4px] text-ink">Wallet<span className="text-accent">Whisper</span></h1>
+        </button>
+        <nav className="order-3 lg:order-2 w-full lg:w-auto overflow-x-auto">
+          <Segmented value={screen === 'about' ? ('' as Screen) : screen} onChange={id => navigate(id)}
+            options={NAV.map(n => ({
+              id: n.id,
+              label: <>{n.label}{n.id === 'review' && reviewCount > 0 && (
+                <span className="bg-orange text-white text-[10px] font-bold rounded-full px-1.5 min-w-5 text-center">{reviewCount}</span>
+              )}</>,
+            }))} />
         </nav>
-        <div className="order-2 sm:order-3">
+        <div className="order-2 lg:order-3 flex items-center gap-2">
+          <button onClick={() => navigate('about')} title="Where your data is stored"
+            className={clsx('hidden sm:flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full cursor-pointer transition',
+              screen === 'about' ? 'bg-good/15 text-good' : 'bg-good/10 text-good hover:bg-good/15')}>
+            <Lock className="w-3.5 h-3.5" /> Private · on this computer
+          </button>
           <input ref={input} type="file" multiple accept=".csv" className="hidden"
             onChange={e => { const list = Array.from(e.target.files ?? []); if (list.length) setFiles(list); e.target.value = ''; }} />
           <button onClick={() => input.current?.click()}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg font-medium text-sm cursor-pointer">
+            className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white px-4 py-1.5 rounded-full font-medium text-sm cursor-pointer shadow-soft">
             <Upload className="w-4 h-4" /> Import
           </button>
         </div>
       </header>
 
       {message && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 mt-4">
-          <div className="p-3 bg-indigo-900/80 border border-indigo-700 text-indigo-100 rounded-lg text-sm flex items-center justify-between gap-3">
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 mt-4">
+          <div className="p-3 bg-surface shadow-card rounded-[10px] text-sm text-ink flex items-center justify-between gap-3 border-l-4 border-accent">
             <span>{message}</span>
-            <button onClick={clearMessage} className="text-indigo-300 hover:text-white cursor-pointer" aria-label="Dismiss"><X className="w-4 h-4" /></button>
+            <button onClick={clearMessage} className="text-muted hover:text-ink cursor-pointer" aria-label="Dismiss"><X className="w-4 h-4" /></button>
           </div>
         </div>
       )}
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-8 flex-1">
         {screen === 'overview' && <Overview />}
         {screen === 'trends' && <Trends />}
         {screen === 'transactions' && <Transactions />}
         {screen === 'review' && <Review />}
         {screen === 'accounts' && <Accounts />}
+        {screen === 'about' && <About />}
       </main>
 
+      <footer className="text-center text-xs text-muted pb-8 px-4">
+        <Lock className="w-3 h-3 inline -mt-0.5 mr-1" />
+        Your statements and spending stay on this computer. Nothing is uploaded.{' '}
+        <button onClick={() => navigate('about')} className="text-accent hover:underline cursor-pointer">How your data is stored</button>
+      </footer>
+
       {dragging && (
-        <div className="fixed inset-0 z-50 bg-indigo-950/80 border-4 border-dashed border-indigo-400 flex items-center justify-center pointer-events-none">
-          <p className="text-2xl font-semibold text-white">Drop bank CSV files to import</p>
+        <div className="fixed inset-0 z-50 bg-white/80 backdrop-blur-sm border-4 border-dashed border-accent flex flex-col items-center justify-center gap-2 pointer-events-none">
+          <p className="text-2xl font-bold tracking-tight text-ink">Drop bank CSV files to import</p>
+          <p className="text-sm text-muted">They're read on this computer and never uploaded anywhere.</p>
         </div>
       )}
       {files && <ImportDialog files={files} onClose={() => setFiles(null)} />}
     </div>
+  );
+}
+
+/** Wallet mark in the SparkFlow palette */
+function Logo() {
+  return (
+    <svg viewBox="0 0 32 32" className="w-8 h-8" aria-hidden="true">
+      <rect x="2" y="7" width="28" height="20" rx="6" fill="#005594" />
+      <path d="M6 7.5 20.5 3.2a2 2 0 0 1 2.5 1.4L23.6 7" fill="#4398D3" />
+      <rect x="19" y="13" width="11" height="8" rx="4" fill="#EE8D3D" />
+      <circle cx="23.5" cy="17" r="1.6" fill="#fff" />
+    </svg>
   );
 }
 

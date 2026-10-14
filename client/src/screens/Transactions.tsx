@@ -4,7 +4,7 @@ import { api, qs } from '../api';
 import type { Summary, Txn, TxnList } from '../api';
 import { useFetch, useStore } from '../store';
 import { PRESETS, formatCents, monthEnd, monthLabel, presetRange, useRoute } from '../lib';
-import { Button, Card, Chip, Empty, Modal, inputClass } from '../ui';
+import { Button, Card, Chip, Empty, Modal, Segmented, inputClass } from '../ui';
 
 const KIND_TABS = [
   { id: 'spending', label: 'Spending' },
@@ -85,14 +85,7 @@ export function Transactions() {
     <div className="space-y-4">
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex rounded-lg overflow-hidden border border-slate-600 text-xs">
-            {KIND_TABS.map(t => (
-              <button key={t.id} onClick={() => set({ kind: t.id === 'spending' ? '' : t.id })}
-                className={`px-3 py-1.5 cursor-pointer ${kind === t.id ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
-                {t.label}
-              </button>
-            ))}
-          </div>
+          <Segmented options={KIND_TABS} value={kind} onChange={id => set({ kind: id === 'spending' ? '' : id })} />
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <select className={inputClass} value={params.month ? '' : preset} onChange={e => set({ preset: e.target.value, month: '' })}>
               {params.month && <option value="">{monthLabel(params.month)}</option>}
@@ -108,16 +101,16 @@ export function Transactions() {
               {accounts.filter(a => a.isTracked).map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
             </select>
             <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+              <Search className="w-3.5 h-3.5 text-muted absolute left-2.5 top-2" />
               <input className={`${inputClass} pl-8 w-44`} placeholder="Search merchant…" value={search} onChange={e => setSearch(e.target.value)} />
             </div>
             {kind === 'spending' && (
-              <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer">
+              <label className="flex items-center gap-1.5 text-ink-2 cursor-pointer">
                 <input type="checkbox" checked={params.onetime === '1'} onChange={e => set({ onetime: e.target.checked ? '1' : '' })} />
                 One-time items
               </label>
             )}
-            <Button onClick={runAi} disabled={aiBusy} title="Categorize unclear merchants with your LLM key (only cleaned merchant names are sent)">
+            <Button onClick={runAi} disabled={aiBusy} title="Sends cleaned merchant descriptions, amounts, account type and bank category to Google Gemini using your own key. No account numbers, balances, dates or names.">
               <Sparkles className={`w-3.5 h-3.5 ${aiBusy ? 'animate-spin' : ''}`} /> AI categorize
             </Button>
           </div>
@@ -135,28 +128,28 @@ export function Transactions() {
       </Card>
 
       {selected.size > 0 && (
-        <div className="sticky top-[72px] z-30 bg-indigo-950/95 border border-indigo-700 rounded-xl px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs shadow-lg">
-          <span className="text-indigo-100 font-medium">{selected.size} selected · {formatCents(selectedSum)}</span>
-          <span className="flex items-center gap-1.5 text-indigo-200"><Users className="w-3.5 h-3.5" /> Assign to</span>
+        <div className="sticky top-[72px] z-30 bg-white/90 border border-accent/25 rounded-xl px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs shadow-lg">
+          <span className="text-brand font-medium">{selected.size} selected · {formatCents(selectedSum)}</span>
+          <span className="flex items-center gap-1.5 text-brand"><Users className="w-3.5 h-3.5" /> Assign to</span>
           <select className={inputClass} value="" onChange={e => e.target.value && setPerson([...selected], e.target.value === 'none' ? null : Number(e.target.value))}>
             <option value="">Choose person…</option>
             {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             <option value="none">Nobody (clear)</option>
           </select>
-          <span className="text-indigo-200">Category</span>
+          <span className="text-brand">Category</span>
           <select className={inputClass} value="" onChange={e => e.target.value && setCategory([...selected], Number(e.target.value))}>
             <option value="">Choose category…</option>
             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          {people.length === 0 && <span className="text-amber-300">Add people on the Accounts screen first.</span>}
+          {people.length === 0 && <span className="text-warn">Add people on the Accounts screen first.</span>}
           <Button variant="ghost" onClick={() => setSelected(new Set())}><X className="w-3.5 h-3.5" /> Clear</Button>
         </div>
       )}
 
       <Card className="p-0 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
-            <thead className="bg-slate-900/60 text-slate-400 uppercase tracking-wider border-b border-slate-700">
+          <table className="w-full text-left text-xs text-ink-2">
+            <thead className="bg-page text-muted uppercase tracking-wider border-b border-line">
               <tr>
                 <th className="pl-4 pr-1 py-3 w-8">
                   <input type="checkbox" aria-label="Select all" checked={allSelected}
@@ -170,9 +163,9 @@ export function Transactions() {
                 <th className="px-3 py-3 text-right">Amount</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-700/50">
+            <tbody className="divide-y divide-line">
               {rows.map(t => (
-                <tr key={t.id} className={`hover:bg-slate-700/30 ${selected.has(t.id) ? 'bg-indigo-900/20' : ''}`}>
+                <tr key={t.id} className={`hover:bg-fill/60 ${selected.has(t.id) ? 'bg-accent/5' : ''}`}>
                   <td className="pl-4 pr-1 py-2.5">
                     <input type="checkbox" aria-label={`Select ${t.merchant}`} checked={selected.has(t.id)} onChange={() => {
                       const next = new Set(selected);
@@ -180,22 +173,22 @@ export function Transactions() {
                       setSelected(next);
                     }} />
                   </td>
-                  <td className="px-3 py-2.5 whitespace-nowrap font-mono text-slate-400">{t.date}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap font-mono text-muted">{t.date}</td>
                   <td className="px-3 py-2.5 max-w-xs">
                     <button className="text-left cursor-pointer group" onClick={() => setEditing(t)}>
-                      <div className="font-medium text-white group-hover:text-indigo-300">{t.merchant}</div>
-                      <div className="text-[11px] text-slate-500 truncate max-w-xs">{t.rawDescription}</div>
+                      <div className="font-medium text-ink group-hover:text-accent">{t.merchant}</div>
+                      <div className="text-[11px] text-muted truncate max-w-xs">{t.rawDescription}</div>
                       {t.kind === 'transfer' && (
-                        <div className="text-[11px] text-sky-300 flex items-center gap-1 mt-0.5">
+                        <div className="text-[11px] text-brand flex items-center gap-1 mt-0.5">
                           <Link2 className="w-3 h-3" />
                           {t.transferVia === 'pair' || t.linkId ? `${VIA_LABEL.pair} ${t.counterparty ?? ''} ${t.partnerDate ?? ''}`
                             : t.counterparty ? `${VIA_LABEL.account}: ${t.counterparty}` : VIA_LABEL[t.transferVia ?? 'manual']}
                         </div>
                       )}
-                      {t.isOneTime && <span className="text-[10px] uppercase tracking-wide text-amber-300">One-time</span>}
+                      {t.isOneTime && <span className="text-[10px] uppercase tracking-wide text-warn">One-time</span>}
                     </button>
                   </td>
-                  <td className="px-3 py-2.5 whitespace-nowrap text-slate-400">{t.account}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-muted">{t.account}</td>
                   <td className="px-3 py-2.5">
                     <select className={`${inputClass} py-1`} value={t.personId ?? ''} aria-label="Person"
                       onChange={e => setPerson([t.id], e.target.value ? Number(e.target.value) : null)}
@@ -209,10 +202,10 @@ export function Transactions() {
                       style={{ backgroundColor: `${t.categoryColor}22`, color: t.categoryColor, border: `1px solid ${t.categoryColor}55` }}>
                       {t.categoryName}
                     </button>
-                    {t.categorySource === 'manual' && <span className="ml-1 text-[10px] text-slate-500">edited</span>}
-                    {t.categorySource === 'ai' && <span className="ml-1 text-[10px] text-purple-300">AI</span>}
+                    {t.categorySource === 'manual' && <span className="ml-1 text-[10px] text-muted">edited</span>}
+                    {t.categorySource === 'ai' && <span className="ml-1 text-[10px] text-[#5856D6]">AI</span>}
                   </td>
-                  <td className={`px-3 py-2.5 whitespace-nowrap text-right font-mono font-medium ${t.amountCents < 0 || (kind !== 'spending' && t.direction === 'in') ? 'text-emerald-400' : 'text-slate-100'}`}>
+                  <td className={`px-3 py-2.5 whitespace-nowrap text-right font-mono font-medium ${t.amountCents < 0 || (kind !== 'spending' && t.direction === 'in') ? 'text-good' : 'text-ink'}`}>
                     {t.kind === 'refund' ? `−${formatCents(Math.abs(t.amountCents))}` : formatCents(t.amountCents)}
                   </td>
                 </tr>
@@ -222,9 +215,9 @@ export function Transactions() {
           {data && rows.length === 0 && <Empty>No matching transactions.</Empty>}
         </div>
         {data && (
-          <div className="border-t border-slate-700 px-4 py-3 flex justify-between text-xs text-slate-400">
+          <div className="border-t border-line px-4 py-3 flex justify-between text-xs text-muted">
             <span>{data.count} transactions{data.truncated ? ` (showing the latest ${rows.length})` : ''}</span>
-            <span>Total <span className="text-white font-semibold font-mono">{formatCents(data.sumCents)}</span></span>
+            <span>Total <span className="text-ink font-semibold font-mono">{formatCents(data.sumCents)}</span></span>
           </div>
         )}
       </Card>
@@ -273,38 +266,38 @@ function EditTxnDialog({ txn, onClose }: { txn: Txn; onClose: () => void }) {
     <Modal title="Edit transaction" onClose={onClose}>
       <div className="space-y-4 text-xs">
         <div>
-          <p className="text-sm font-semibold text-white">{txn.merchant}</p>
-          <p className="text-slate-500 mt-0.5 break-all">{txn.rawDescription}</p>
-          <p className="text-slate-400 mt-1">{txn.date} · {txn.account} · {formatCents(txn.amountCents)}</p>
+          <p className="text-sm font-semibold text-ink">{txn.merchant}</p>
+          <p className="text-muted mt-0.5 break-all">{txn.rawDescription}</p>
+          <p className="text-muted mt-1">{txn.date} · {txn.account} · {formatCents(txn.amountCents)}</p>
         </div>
 
         <label className="block">
-          <span className="text-slate-400 block mb-1">Category</span>
+          <span className="text-muted block mb-1">Category</span>
           <select className={`${inputClass} w-full`} value={categoryId} onChange={e => setCategoryId(Number(e.target.value))}>
             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </label>
-        <label className="flex items-center gap-2 text-slate-300">
+        <label className="flex items-center gap-2 text-ink-2">
           <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
           Always use this category for "{txn.merchant}"
         </label>
 
         <label className="block">
-          <span className="text-slate-400 block mb-1">Person</span>
+          <span className="text-muted block mb-1">Person</span>
           <select className={`${inputClass} w-full`} value={personId ?? ''} onChange={e => setPersonId(e.target.value ? Number(e.target.value) : null)}>
             <option value="">— Unassigned</option>
             {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </label>
         {personId && (
-          <label className="flex items-center gap-2 text-slate-300">
+          <label className="flex items-center gap-2 text-ink-2">
             <input type="checkbox" checked={rememberPerson} onChange={e => setRememberPerson(e.target.checked)} />
             Always assign "{txn.merchant}" to this person
           </label>
         )}
 
         <label className="block">
-          <span className="text-slate-400 block mb-1">What kind of money movement is this?</span>
+          <span className="text-muted block mb-1">What kind of money movement is this?</span>
           <select className={`${inputClass} w-full`} value={kind} onChange={e => setKind(e.target.value)}>
             <option value="spend">Spending</option>
             <option value="refund">Refund (reduces spending)</option>
@@ -315,20 +308,20 @@ function EditTxnDialog({ txn, onClose }: { txn: Txn; onClose: () => void }) {
         </label>
 
         {(kind === 'spend' || kind === 'fee') && (
-          <label className="flex items-center gap-2 text-slate-300">
+          <label className="flex items-center gap-2 text-ink-2">
             <input type="checkbox" checked={oneTime} onChange={e => setOneTime(e.target.checked)} />
             One-time item (keep it out of normal monthly trends)
           </label>
         )}
 
         {txn.linkId && (
-          <div className="rounded-lg border border-sky-800 bg-sky-950/40 p-3 text-sky-200 flex items-center justify-between gap-2">
+          <div className="rounded-lg border border-sky/30 bg-sky/10 p-3 text-brand flex items-center justify-between gap-2">
             <span>Matched with {txn.counterparty} on {txn.partnerDate}</span>
             <Button variant="ghost" onClick={unlink}>Not the same money: unlink</Button>
           </div>
         )}
 
-        <div className="flex justify-end gap-2 pt-3 border-t border-slate-700">
+        <div className="flex justify-end gap-2 pt-3 border-t border-line">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={busy} onClick={save}>Save</Button>
         </div>

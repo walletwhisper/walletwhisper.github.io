@@ -34,9 +34,9 @@ export function Review() {
       {data.items.length === 0 ? (
         <Card>
           <div className="text-center py-10">
-            <CheckCircle2 className="w-10 h-10 text-emerald-400 mx-auto" />
-            <p className="mt-3 text-white font-medium">Nothing to review</p>
-            <p className="text-xs text-slate-400 mt-1">Every transfer is matched or explained, so nothing is counted twice.</p>
+            <CheckCircle2 className="w-10 h-10 text-good mx-auto" />
+            <p className="mt-3 text-ink font-medium">Nothing to review</p>
+            <p className="text-xs text-muted mt-1">Every transfer is matched or explained, so nothing is counted twice.</p>
           </div>
         </Card>
       ) : groups.map(g => {
@@ -52,7 +52,7 @@ export function Review() {
       })}
 
       <Card title="Settings">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-ink-2">
           Suggest "one-time" for single payments over {formatCents(data.oneTimeThresholdCents)}. Change to $
           <input className={`${inputClass} w-28`} inputMode="decimal" value={threshold} onChange={e => setThreshold(e.target.value)} placeholder="5000" />
           <Button onClick={saveThreshold} disabled={!threshold}>Save</Button>
@@ -67,17 +67,17 @@ function TxnLines({ txns, limit = 4 }: { txns: ReviewTxn[]; limit?: number }) {
   const shown = open ? txns : txns.slice(0, limit);
   return (
     <div className="mt-2">
-      <ul className="space-y-1 text-[11px] font-mono text-slate-400">
+      <ul className="space-y-1 text-[11px] font-mono text-muted">
         {shown.map(t => (
           <li key={t.id} className="flex gap-3">
-            <span>{t.date}</span><span className="text-slate-500">{t.account}</span>
+            <span>{t.date}</span><span className="text-muted">{t.account}</span>
             <span className="truncate flex-1">{t.description}</span>
-            <span className="text-slate-200">{t.direction === 'in' ? '+' : '−'}{formatCents(t.amountCents)}</span>
+            <span className="text-ink">{t.direction === 'in' ? '+' : '−'}{formatCents(t.amountCents)}</span>
           </li>
         ))}
       </ul>
       {txns.length > limit && (
-        <button className="mt-1 text-[11px] text-indigo-300 flex items-center gap-1 cursor-pointer" onClick={() => setOpen(!open)}>
+        <button className="mt-1 text-[11px] text-accent flex items-center gap-1 cursor-pointer" onClick={() => setOpen(!open)}>
           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           {open ? 'Show fewer' : `Show all ${txns.length}`}
         </button>
@@ -100,15 +100,15 @@ function ReviewCard({ item }: { item: ReviewItem }) {
   };
 
   return (
-    <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-4">
+    <div className="rounded-lg border border-line bg-page p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-sm font-medium text-white">{item.title}</p>
-        <p className="text-xs font-mono text-slate-300">{formatCents(item.totalCents)}</p>
+        <p className="text-sm font-medium text-ink">{item.title}</p>
+        <p className="text-xs font-mono text-ink-2">{formatCents(item.totalCents)}</p>
       </div>
-      <p className="text-xs text-slate-400 mt-1">{item.detail}</p>
+      <p className="text-xs text-muted mt-1">{item.detail}</p>
       <TxnLines txns={item.txns} />
 
-      <div className="mt-3 pt-3 border-t border-slate-700/70">
+      <div className="mt-3 pt-3 border-t border-line">
         {item.type === 'unmatched_transfer' && <AssignAccount item={item} busy={busy} onAnswer={answer} accounts={accounts} />}
         {item.type === 'unmatched_transfer' && (
           <div className="flex flex-wrap gap-2 mt-2">
@@ -125,7 +125,7 @@ function ReviewCard({ item }: { item: ReviewItem }) {
           <div className="space-y-1.5">
             {item.candidates?.map(c => (
               <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                <span className="text-slate-300 font-mono">{c.date} · {c.account} · {c.description}</span>
+                <span className="text-ink-2 font-mono">{c.date} · {c.account} · {c.description}</span>
                 <Button disabled={busy} onClick={() => answer({ action: 'link', outId: item.txns[0].id, inId: c.id })}>This one</Button>
               </div>
             ))}
@@ -164,13 +164,13 @@ function AssignAccount({ item, busy, onAnswer, accounts }: {
   return (
     <div className="space-y-2 text-xs">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-slate-300">{item.direction === 'in' ? 'Came from' : 'Went to'}</span>
+        <span className="text-ink-2">{item.direction === 'in' ? 'Came from' : 'Went to'}</span>
         <select className={inputClass} value={target} onChange={e => setTarget(e.target.value)}>
           <option value="">Choose one of our accounts…</option>
           {accounts.map(a => <option key={a.id} value={a.id}>{a.label}{a.isTracked ? '' : ' (not imported)'}</option>)}
           <option value="new">+ An account we don’t import…</option>
         </select>
-        <span className="text-slate-400">matching descriptions containing</span>
+        <span className="text-muted">matching descriptions containing</span>
         <input className={`${inputClass} w-64`} value={pattern} onChange={e => setPattern(e.target.value)} />
       </div>
       {target === 'new' && (
@@ -205,7 +205,7 @@ function Household({ item, busy, onAnswer, people }: {
   const [newName, setNewName] = useState('');
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
-      <span className="text-slate-300">Yes, it’s</span>
+      <span className="text-ink-2">Yes, it’s</span>
       <select className={inputClass} value={personId} onChange={e => setPersonId(e.target.value)}>
         <option value="">Choose…</option>
         {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}

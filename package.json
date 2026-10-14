@@ -1,14 +1,15 @@
 {
-  "name": "financialtool",
+  "name": "walletwhisper",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Private, local-first household spending tracker for bank CSV statements",
   "type": "module",
   "scripts": {
     "start": "tsx run.js",
+    "prestart": "npm run build:client",
+    "postinstall": "npm --prefix client install",
     "dev:server": "tsx watch src/server.ts",
-    "dev:client": "cd client && npm run dev",
-    "build:client": "cd client && npm run build",
+    "dev:client": "npm --prefix client run dev",
+    "build:client": "npm --prefix client run build",
     "test": "vitest run",
     "prepare": "git config core.hooksPath .githooks || true",
     "privacy-check": "node scripts/privacy-check.mjs --all"
@@ -29,5 +30,8 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

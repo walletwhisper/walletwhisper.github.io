@@ -2,7 +2,7 @@ import express, { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { audit, backupDb, getDb, setSetting } from './db.js';
+import { audit, backupDb, backupDir, dbPath, getDb, setSetting } from './db.js';
 import { AccountChoice, backfillLast4, finishImports, importCsvContent, previewCsv, accountLabel } from './importer.js';
 import { recategorizeWithLlm } from './llm.js';
 import { parseList, recompute, saveDecision } from './ledger.js';
@@ -374,7 +374,13 @@ export async function createServer() {
 
   // ---------- Settings ----------
   app.get('/api/settings', h((_req, res) => {
-    res.json({ oneTimeThresholdCents: oneTimeThreshold(db), aiConfigured: hasLlmKey() });
+    res.json({
+      oneTimeThresholdCents: oneTimeThreshold(db),
+      aiConfigured: hasLlmKey(),
+      // Shown on the About page so people can see exactly where their data lives
+      databaseFile: dbPath() === ':memory:' ? null : path.resolve(dbPath()),
+      backupFolder: path.resolve(backupDir()),
+    });
   }));
 
   app.patch('/api/settings', h((req, res) => {

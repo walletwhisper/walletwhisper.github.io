@@ -1,4 +1,4 @@
-# Spending Analyzer — Design Document (v4)
+# WalletWhisper — Design Document (v4)
 
 > **Status:** Phases 0–3 implemented (branch `v4-rework`) · Phase 4 (more banks) waits for real header rows · Phase 5 partly done (AI limited to spending categories) · **Runs:** localhost only
 
@@ -260,7 +260,7 @@ The app **never guesses** who spent what. It only makes marking fast.
 ### 8.2 Overview
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ Spending Analyzer   [Overview] Trends  Transactions  Review(3)  Accounts │
+│ WalletWhisper       [Overview] Trends  Transactions  Review(3)  Accounts │
 │                                        [Oct 2026 ▾]  [⬆ Import CSVs]     │
 ├────────────────┬────────────────┬────────────────┬───────────────────────┤
 │ Spent $4,210   │ vs typical     │ One-time $0    │ ✅ Month complete      │

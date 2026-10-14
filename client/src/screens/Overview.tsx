@@ -5,7 +5,7 @@ import type { Slice, Summary, Trends } from '../api';
 import { qs } from '../api';
 import { useFetch } from '../store';
 import { formatCents, median, monthEnd, monthLabel, useRoute } from '../lib';
-import { Button, Card, Dot, Empty, Stat } from '../ui';
+import { Button, Card, Dot, Empty, Stat, tooltipClass } from '../ui';
 
 export function Overview() {
   const { params, navigate } = useRoute();
@@ -54,15 +54,15 @@ export function Overview() {
           <Button variant="ghost" disabled={idx <= 0} onClick={() => navigate('overview', { month: months[idx - 1] })} aria-label="Previous month">
             <ChevronLeft className="w-4 h-4" />
           </Button>
-          <h2 className="text-xl font-semibold text-white w-36 text-center">{monthLabel(month)}</h2>
+          <h2 className="text-xl font-semibold text-ink w-36 text-center">{monthLabel(month)}</h2>
           <Button variant="ghost" disabled={idx < 0 || idx >= months.length - 1} onClick={() => navigate('overview', { month: months[idx + 1] })} aria-label="Next month">
             <ChevronRight className="w-4 h-4" />
           </Button>
         </div>
         {complete ? (
-          <span className="text-xs text-emerald-300 flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> All accounts imported for this month</span>
+          <span className="text-xs text-good flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> All accounts imported for this month</span>
         ) : (
-          <button onClick={() => navigate('accounts')} className="text-xs text-amber-300 flex items-center gap-1.5 cursor-pointer hover:underline">
+          <button onClick={() => navigate('accounts')} className="text-xs text-warn flex items-center gap-1.5 cursor-pointer hover:underline">
             <AlertTriangle className="w-4 h-4" /> Incomplete month: some account statements are missing. See coverage
           </button>
         )}
@@ -100,13 +100,13 @@ export function Overview() {
                 <li key={c.key}>
                   <button className="w-full text-left cursor-pointer group" onClick={() => c.key !== '-1' && goTxns({ cat: c.key })}>
                     <div className="flex items-center justify-between text-sm">
-                      <span className="flex items-center gap-2 text-slate-200 group-hover:text-white"><Dot color={c.color} />{c.name}</span>
-                      <span className={c.diff > 0 ? 'text-amber-300 flex items-center' : 'text-emerald-300 flex items-center'}>
+                      <span className="flex items-center gap-2 text-ink group-hover:text-ink"><Dot color={c.color} />{c.name}</span>
+                      <span className={c.diff > 0 ? 'text-warn flex items-center' : 'text-good flex items-center'}>
                         {c.diff > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
                         {formatCents(Math.abs(c.diff))}
                       </span>
                     </div>
-                    <div className="text-xs text-slate-500 mt-0.5">{formatCents(c.now)} this month · typical {formatCents(c.typical)}</div>
+                    <div className="text-xs text-muted mt-0.5">{formatCents(c.now)} this month · typical {formatCents(c.typical)}</div>
                   </button>
                 </li>
               ))}
@@ -127,7 +127,7 @@ export function Overview() {
   );
 }
 
-const ACCOUNT_COLORS = ['#6366F1', '#F59E0B', '#10B981', '#EC4899', '#06B6D4', '#8B5CF6'];
+const ACCOUNT_COLORS = ['#005594', '#EE8D3D', '#4398D3', '#C5362F', '#34C759', '#5856D6'];
 
 export function CategoryDonut({ slices, onPick, selectedId }: { slices: Slice[]; onPick: (s: Slice) => void; selectedId?: number }) {
   if (slices.length === 0) return <Empty>No spending in this period.</Empty>;
@@ -139,7 +139,7 @@ export function CategoryDonut({ slices, onPick, selectedId }: { slices: Slice[];
             <Pie data={slices} dataKey="cents" nameKey="name" innerRadius="58%" outerRadius="90%" paddingAngle={2} cursor="pointer"
               onClick={(_, i) => onPick(slices[i])}>
               {slices.map(s => (
-                <Cell key={String(s.id)} fill={s.color} stroke="#0f172a" strokeWidth={2}
+                <Cell key={String(s.id)} fill={s.color} stroke="#ffffff" strokeWidth={2}
                   opacity={selectedId && selectedId !== s.id ? 0.35 : 1} />
               ))}
             </Pie>
@@ -147,10 +147,10 @@ export function CategoryDonut({ slices, onPick, selectedId }: { slices: Slice[];
               if (!active || !payload?.length) return null;
               const d = payload[0].payload as Slice;
               return (
-                <div className="bg-slate-900 border border-slate-600 px-3 py-2 rounded-lg shadow-xl text-xs">
-                  <p className="font-semibold text-white flex items-center gap-2"><Dot color={d.color} />{d.name}</p>
-                  <p className="text-slate-200 mt-1">{formatCents(d.cents)} · {d.pct}%</p>
-                  <p className="text-slate-400">{d.count} transactions</p>
+                <div className={tooltipClass}>
+                  <p className="font-semibold text-ink flex items-center gap-2"><Dot color={d.color} />{d.name}</p>
+                  <p className="text-ink mt-1">{formatCents(d.cents)} · {d.pct}%</p>
+                  <p className="text-muted">{d.count} transactions</p>
                 </div>
               );
             }} />
@@ -160,9 +160,9 @@ export function CategoryDonut({ slices, onPick, selectedId }: { slices: Slice[];
       <ul className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
         {slices.map(s => (
           <li key={String(s.id)}>
-            <button onClick={() => onPick(s)} className="w-full flex items-center justify-between gap-2 text-xs px-2 py-1 rounded hover:bg-slate-700/50 cursor-pointer">
-              <span className="flex items-center gap-2 text-slate-200 truncate"><Dot color={s.color} />{s.name}</span>
-              <span className="text-slate-400 font-mono whitespace-nowrap">{formatCents(s.cents)} <span className="text-slate-500">{s.pct}%</span></span>
+            <button onClick={() => onPick(s)} className="w-full flex items-center justify-between gap-2 text-xs px-2 py-1 rounded hover:bg-fill cursor-pointer">
+              <span className="flex items-center gap-2 text-ink truncate"><Dot color={s.color} />{s.name}</span>
+              <span className="text-muted font-mono whitespace-nowrap">{formatCents(s.cents)} <span className="text-muted">{s.pct}%</span></span>
             </button>
           </li>
         ))}
@@ -179,10 +179,10 @@ function Bars({ slices, total, onPick }: { slices: Slice[]; total: number; onPic
         <li key={String(s.id)}>
           <button className="w-full text-left cursor-pointer group" onClick={() => onPick(s)}>
             <div className="flex justify-between text-xs mb-1">
-              <span className="text-slate-200 group-hover:text-white flex items-center gap-2"><Dot color={s.color} />{s.name}</span>
-              <span className="text-slate-400 font-mono">{formatCents(s.cents)} · {s.pct}%</span>
+              <span className="text-ink group-hover:text-ink flex items-center gap-2"><Dot color={s.color} />{s.name}</span>
+              <span className="text-muted font-mono">{formatCents(s.cents)} · {s.pct}%</span>
             </div>
-            <div className="h-2.5 bg-slate-700/60 rounded-full overflow-hidden">
+            <div className="h-2.5 bg-fill rounded-full overflow-hidden">
               <div className="h-full rounded-full" style={{ width: `${total > 0 ? Math.max(1, (s.cents / total) * 100) : 0}%`, backgroundColor: s.color }} />
             </div>
           </button>

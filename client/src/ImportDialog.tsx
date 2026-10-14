@@ -53,26 +53,26 @@ export function ImportDialog({ files, onClose }: { files: File[]; onClose: () =>
 
   return (
     <Modal title="Import bank files" onClose={onClose} wide>
-      {error && <p className="text-sm text-rose-300 mb-3">{error}</p>}
-      {!previews && !error && <p className="text-sm text-slate-400">Reading files…</p>}
+      {error && <p className="text-sm text-bad mb-3">{error}</p>}
+      {!previews && !error && <p className="text-sm text-muted">Reading files…</p>}
       {previews && (
         <div className="space-y-3">
           {previews.map(p => (
-            <div key={p.filename} className="border border-slate-700 rounded-lg p-3 bg-slate-900/40">
-              <div className="flex items-center gap-2 text-sm font-medium text-white">
-                <FileText className="w-4 h-4 text-slate-400" /> {p.filename}
+            <div key={p.filename} className="border border-line rounded-lg p-3 bg-page">
+              <div className="flex items-center gap-2 text-sm font-medium text-ink">
+                <FileText className="w-4 h-4 text-muted" /> {p.filename}
               </div>
               {p.error ? (
-                <p className="mt-2 text-xs text-rose-300 flex items-start gap-1.5"><AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />{p.error}</p>
+                <p className="mt-2 text-xs text-bad flex items-start gap-1.5"><AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />{p.error}</p>
               ) : (
                 <>
-                  <p className="mt-1.5 text-xs text-slate-300">
+                  <p className="mt-1.5 text-xs text-ink-2">
                     {p.bank} {p.accountType}{p.last4 ? ` ending ${p.last4}` : ''} · {p.minDate} → {p.maxDate} ·{' '}
-                    <span className="text-emerald-300 font-semibold">{p.newRows} new</span>
-                    {p.duplicates ? <span className="text-slate-400"> · {p.duplicates} already imported (skipped)</span> : null}
+                    <span className="text-good font-semibold">{p.newRows} new</span>
+                    {p.duplicates ? <span className="text-muted"> · {p.duplicates} already imported (skipped)</span> : null}
                   </p>
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                    <span className={p.needsAccountChoice ? 'text-amber-300' : 'text-slate-400'}>
+                    <span className={p.needsAccountChoice ? 'text-warn' : 'text-muted'}>
                       {p.needsAccountChoice ? 'Which account is this?' : 'Account:'}
                     </span>
                     <select className={inputClass} value={choice[p.filename]} onChange={e => setChoice({ ...choice, [p.filename]: e.target.value })}>
@@ -84,11 +84,11 @@ export function ImportDialog({ files, onClose }: { files: File[]; onClose: () =>
               )}
             </div>
           ))}
-          <p className="text-xs text-slate-400 flex items-center gap-1.5">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+          <p className="text-xs text-muted flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5 text-good" />
             After importing, transfers between your accounts are matched automatically so nothing is counted twice.
           </p>
-          <div className="flex justify-end gap-2 pt-2 border-t border-slate-700">
+          <div className="flex justify-end gap-2 pt-2 border-t border-line">
             <Button variant="ghost" onClick={onClose}>Cancel</Button>
             <Button variant="primary" disabled={busy || importable.length === 0} onClick={doImport}>
               {busy ? 'Importing…' : `Import ${importable.length} file${importable.length === 1 ? '' : 's'}`}
