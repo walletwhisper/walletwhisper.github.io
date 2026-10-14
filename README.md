@@ -4,15 +4,14 @@
 
 WalletWhisper turns the CSV statements you download from your banks into one clear picture of your spending: by month, by category, by person, and by account. It runs entirely on your own computer.
 
-> ## 🔒 Your financial data never leaves your computer
+> ## 🔒 Your financial data stays on your computer
 >
-> - **There is no WalletWhisper server and no account to sign up for.** You download the program from GitHub and run it on your own machine. GitHub only hosts the code; your statements never go there.
-> - **Everything is stored in one local file:** `data/app.db` inside the folder where you installed the app. Automatic backups go to `data/backups/`. Both folders are git-ignored, so they can't be committed by accident.
-> - **Only your computer can open the app.** It listens on `127.0.0.1` (localhost), so other devices on your network can't reach it. It also refuses requests from other websites open in your browser.
-> - **No analytics, no tracking, no cookies, no external fonts or scripts.**
-> - **AI is optional and off by default.** See [Optional: AI categories](#optional-ai-categories) for exactly what is sent if you turn it on.
+> - **WalletWhisper is a program you run on your own computer.** There is no WalletWhisper server, no sign-up and no tracking. GitHub only hosts the code; your statements never go there.
+> - **You choose where your data is kept.** The first time you start the app, it asks which folder to use. Your transactions, people, choices and automatic backups all stay in that folder, and you can move it later in **Settings**.
+> - **Only you can open it.** The app only accepts connections from your own computer, so other devices and websites can't read your data.
+> - **AI is optional.** It's off unless you add your own AI key, and nothing is sent until you press **AI categorize**.
 >
-> To delete everything, use **Accounts → Reset all data** in the app, or delete the `data/` folder. To move to a new computer, copy the `data/` folder.
+> To delete everything, use **Accounts → Reset all data**, or delete your data folder.
 
 ---
 
@@ -41,24 +40,22 @@ You need [Node.js](https://nodejs.org) 20 or newer.
 git clone https://github.com/XiaoLiu8811/financialTool.git walletwhisper
 cd walletwhisper
 npm install      # installs the server and the web interface
-npm start        # builds the interface and opens http://127.0.0.1:8000
+npm start        # builds the interface and opens it in your browser
 ```
 
-Then download CSV statements from your bank's website and drop them onto the page, or click **Import**.
+Choose a folder for your data, then download CSV statements from your bank's website and drop them onto the page, or click **Import**.
 
 ### Optional: AI categories
 
-WalletWhisper categorizes transactions with built-in rules and your own corrections, so you don't need AI. If you'd like AI suggestions for unclear merchants:
+WalletWhisper works fully without AI: categories come from built-in rules and your own corrections. If you'd like AI suggestions for merchants it doesn't recognize:
 
-1. Copy `.env.example` to `.env`.
-2. Paste your own Google Gemini API key into it. `.env` is git-ignored.
-3. Press **AI categorize** on the Transactions screen.
+1. Create an API key with your AI provider. Claude, Gemini and OpenAI keys all work.
+2. In WalletWhisper, open **Settings** and paste the key. It's saved on your computer only.
+3. On the Transactions screen, press **AI categorize** whenever you want suggestions.
 
-What gets sent to Google, only when you press the button:
-- **Sent:** cleaned merchant descriptions with reference numbers stripped, the amount, the bank's own category, and whether the account is checking or credit.
-- **Never sent:** account numbers, balances, dates, people, or file names.
+Without a key, everything else works as normal; only **AI categorize** is unavailable.
 
-The AI can only suggest a spending category. It never decides what is a transfer or income, and it never overrides a choice you made.
+When you press the button, only cleaned merchant descriptions, amounts, the account type (checking or credit) and the bank's own category are sent to your AI provider. Account numbers, balances, dates and names are never sent. The AI only suggests spending categories and never overrides a choice you made.
 
 ## For developers
 

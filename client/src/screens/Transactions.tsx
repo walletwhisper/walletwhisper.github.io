@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, X, Link2, Sparkles, Users } from 'lucide-react';
 import { api, qs } from '../api';
-import type { Summary, Txn, TxnList } from '../api';
+import type { Settings, Summary, Txn, TxnList } from '../api';
 import { useFetch, useStore } from '../store';
 import { PRESETS, formatCents, monthEnd, monthLabel, presetRange, useRoute } from '../lib';
 import { Button, Card, Chip, Empty, Modal, Segmented, inputClass } from '../ui';
@@ -25,6 +25,7 @@ export function Transactions() {
   const { params, navigate } = useRoute();
   const { categories, people, accounts, refresh, toast } = useStore();
   const summary = useFetch<Summary>('/api/summary');
+  const aiReady = useFetch<Settings>('/api/settings').data?.aiConfigured ?? false;
   const latest = summary.data?.dataRange.max ?? null;
   const set = (patch: Record<string, string>) => navigate('transactions', { ...params, ...patch });
 
@@ -71,6 +72,11 @@ export function Transactions() {
   };
 
   const runAi = async () => {
+    if (!aiReady) {
+      toast('AI is optional. To turn it on, add your own AI API key here in Settings.');
+      navigate('settings');
+      return;
+    }
     setAiBusy(true);
     toast('Asking the AI to categorize unclear merchants…');
     try {
@@ -110,7 +116,9 @@ export function Transactions() {
                 One-time items
               </label>
             )}
-            <Button onClick={runAi} disabled={aiBusy} title="Sends cleaned merchant descriptions, amounts, account type and bank category to Google Gemini using your own key. No account numbers, balances, dates or names.">
+            <Button onClick={runAi} disabled={aiBusy} title={aiReady
+              ? 'Sends cleaned merchant descriptions, amounts, account type and bank category to your AI provider. Never account numbers, balances, dates or names.'
+              : 'Optional: add your own AI API key in Settings to use this'}>
               <Sparkles className={`w-3.5 h-3.5 ${aiBusy ? 'animate-spin' : ''}`} /> AI categorize
             </Button>
           </div>

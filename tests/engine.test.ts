@@ -284,7 +284,7 @@ describe('Categories, people, and decisions', () => {
 
   it('C-04: the AI only changes spending categories, never kind, and never sees transfers', async () => {
     load(db, CREDIT, CHECKING);
-    process.env.LLM_API_KEY = 'test-key';
+    process.env.LLM_API_KEY = 'AIza' + 'x'.repeat(35); // fake Gemini-format key; fetch is stubbed below
     const sent: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: any) => {
       const prompt = JSON.parse(init.body).contents[0].parts[0].text as string;

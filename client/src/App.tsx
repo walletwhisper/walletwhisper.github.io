@@ -12,6 +12,10 @@ import { Transactions } from './screens/Transactions';
 import { Review } from './screens/Review';
 import { Accounts } from './screens/Accounts';
 import { About } from './screens/About';
+import { Settings } from './screens/Settings';
+import { Setup } from './screens/Setup';
+import { api } from './api';
+import type { SetupInfo } from './api';
 import { Segmented } from './ui';
 
 const NAV: { id: Screen; label: string }[] = [
@@ -20,6 +24,7 @@ const NAV: { id: Screen; label: string }[] = [
   { id: 'transactions', label: 'Transactions' },
   { id: 'review', label: 'Review' },
   { id: 'accounts', label: 'Accounts' },
+  { id: 'settings', label: 'Settings' },
 ];
 
 function Shell() {
@@ -104,6 +109,7 @@ function Shell() {
         {screen === 'transactions' && <Transactions />}
         {screen === 'review' && <Review />}
         {screen === 'accounts' && <Accounts />}
+        {screen === 'settings' && <Settings />}
         {screen === 'about' && <About />}
       </main>
 
@@ -137,6 +143,15 @@ function Logo() {
 }
 
 export function App() {
+  const [setup, setSetup] = useState<SetupInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.get<SetupInfo>('/api/setup').then(setSetup).catch(e => setError(e.message));
+  }, []);
+
+  if (error) return <div className="min-h-screen bg-page flex items-center justify-center text-sm text-bad p-4">Can't reach WalletWhisper: {error}</div>;
+  if (!setup) return <div className="min-h-screen bg-page" />;
+  if (!setup.configured) return <Setup suggestedFolder={setup.suggestedFolder} onDone={() => setSetup({ ...setup, configured: true })} />;
   return (
     <StoreProvider>
       <Shell />

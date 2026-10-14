@@ -1,12 +1,6 @@
 import type { ReactNode } from 'react';
 import { BarChart3, FileSpreadsheet, HardDrive, Layers, Lock, ShieldCheck, Sparkles, Users } from 'lucide-react';
-import { useFetch } from '../store';
-
-interface Settings {
-  aiConfigured: boolean;
-  databaseFile: string | null;
-  backupFolder: string;
-}
+import { useRoute } from '../lib';
 
 const STEPS = [
   { color: '#005594', label: 'Download CSVs from your bank', desc: 'Export statements from each bank website, the same way you always do.' },
@@ -16,8 +10,6 @@ const STEPS = [
 ];
 
 export function About() {
-  const settings = useFetch<Settings>('/api/settings').data;
-
   return (
     <div className="max-w-5xl mx-auto">
       <div className="text-center mb-10">
@@ -28,7 +20,7 @@ export function About() {
         </p>
       </div>
 
-      <PrivacyPanel settings={settings} />
+      <PrivacyPanel />
 
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-8 items-stretch mt-10">
         <div className="flex flex-col">
@@ -52,8 +44,8 @@ export function About() {
             <Feature color="#4398D3" icon={<Layers />} title="Every dollar once" desc="Card payments and transfers between your accounts are matched, so nothing is double counted" />
             <Feature color="#EE8D3D" icon={<BarChart3 />} title="See it visually" desc="Monthly overview, category donut, and trends that flag incomplete months" />
             <Feature color="#5856D6" icon={<Users />} title="Who spent what" desc="Mark each transaction with a person; set a default person per account" />
-            <Feature color="#34C759" icon={<Sparkles />} title="Optional AI categories" desc="Off by default. Uses your own API key, and only when you press the button" />
-            <Feature color="#C5362F" icon={<Lock />} title="100% private" desc="No accounts, no cloud, no tracking. Your data stays in a file on this computer" />
+            <Feature color="#34C759" icon={<Sparkles />} title="Optional AI categories" desc="Off unless you add your own AI key in Settings, and used only when you press the button" />
+            <Feature color="#C5362F" icon={<Lock />} title="100% private" desc="No accounts, no cloud, no tracking. Your data stays in a folder on this computer" />
           </div>
         </div>
       </div>
@@ -73,7 +65,8 @@ export function About() {
   );
 }
 
-function PrivacyPanel({ settings }: { settings: Settings | null | undefined }) {
+function PrivacyPanel() {
+  const { navigate } = useRoute();
   return (
     <section className="bg-surface rounded-card shadow-card p-6 sm:p-7">
       <div className="flex items-start gap-4">
@@ -81,34 +74,28 @@ function PrivacyPanel({ settings }: { settings: Settings | null | undefined }) {
           <ShieldCheck className="w-6 h-6" />
         </div>
         <div className="flex-1">
-          <h3 className="text-lg font-bold tracking-tight text-ink">Where your data is stored</h3>
+          <h3 className="text-lg font-bold tracking-tight text-ink">Your data stays on this computer</h3>
           <p className="text-sm text-ink-2 mt-1 leading-relaxed">
-            WalletWhisper runs entirely on your own computer. There is no WalletWhisper server, no sign-up, and no analytics.
-            Downloading the app from GitHub gives you only the program; your statements are never sent to GitHub or anywhere else.
+            WalletWhisper is a program that runs on your own computer. There is no WalletWhisper server, no sign-up and no tracking.
           </p>
 
           <ul className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 text-sm">
-            <Fact icon={<HardDrive />} title="One file on this computer">
-              Every transaction, person, and choice you make is saved in a database file
-              {settings?.databaseFile ? <> at <Path>{settings.databaseFile}</Path></> : ' in the app\'s data folder'}.
+            <Fact icon={<HardDrive />} title="Saved in a folder you chose">
+              Your transactions, people and choices, plus automatic backups, are kept in your data folder.
+              See or change it in{' '}
+              <button className="text-accent hover:underline cursor-pointer" onClick={() => navigate('settings')}>Settings</button>.
             </Fact>
-            <Fact icon={<ShieldCheck />} title="Automatic local backups">
-              Daily copies, plus one before every undo or reset, are kept in
-              {settings ? <> <Path>{settings.backupFolder}</Path></> : ' the backups folder'}.
+            <Fact icon={<Lock />} title="Only you can open it">
+              The app only accepts connections from this computer, so other devices and websites can't read your data.
             </Fact>
-            <Fact icon={<Lock />} title="Only this computer can open it">
-              The app listens on <Path>127.0.0.1</Path> only. Other devices on your Wi-Fi can't reach it,
-              and other websites are blocked from talking to it.
+            <Fact icon={<ShieldCheck />} title="Nothing is uploaded">
+              Bank files are read on this computer. Downloading WalletWhisper from GitHub gives you only the program, never anyone's data.
             </Fact>
-            <Fact icon={<Sparkles />} title={`AI categories: ${settings?.aiConfigured ? 'set up, used only when you press "AI categorize"' : 'off'}`}>
-              If you add your own Google Gemini key, pressing <b>AI categorize</b> sends cleaned merchant descriptions, amounts, account type (checking or credit),
-              and the bank's category to Google to suggest categories. Never account numbers, balances, dates, or names.
+            <Fact icon={<Sparkles />} title="AI is optional">
+              It's off unless you add your own AI key. Even then, nothing is sent until you press <b>AI categorize</b>,
+              and never account numbers, balances, dates or names.
             </Fact>
           </ul>
-
-          <p className="text-xs text-muted mt-5">
-            To delete everything, use <b>Accounts → Reset all data</b>, or delete the data folder. To move to another computer, copy that folder.
-          </p>
         </div>
       </div>
     </section>
@@ -125,10 +112,6 @@ function Fact({ icon, title, children }: { icon: ReactNode; title: string; child
       </span>
     </li>
   );
-}
-
-function Path({ children }: { children: ReactNode }) {
-  return <code className="text-[12px] bg-page text-ink-2 px-1.5 py-0.5 rounded-md break-all">{children}</code>;
 }
 
 function SectionTitle({ children }: { children: ReactNode }) {

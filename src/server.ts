@@ -2,9 +2,10 @@ import express, { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { audit, backupDb, backupDir, dbPath, getDb, setSetting } from './db.js';
+import { audit, backupDb, currentDataFolder, Db, getDb, isSetUp, resetDbInstance, setSetting } from './db.js';
+import { suggestedDataFolder, updateConfig } from './config.js';
 import { AccountChoice, backfillLast4, finishImports, importCsvContent, previewCsv, accountLabel } from './importer.js';
-import { recategorizeWithLlm } from './llm.js';
+import { aiStatus, detectProvider, PROVIDER_NAMES, recategorizeWithLlm } from './llm.js';
 import { parseList, recompute, saveDecision } from './ledger.js';
 import { answerReview, getReviewItems, linkManually, oneTimeThreshold, pickColor, ReviewAnswer, setKindManually, unlink } from './review.js';
 import { getCoverage, getSummary, getTransactions, getTrends, parseFilters, StackBy } from './reports.js';
@@ -34,15 +35,41 @@ const KINDS = new Set(['spend', 'refund', 'income', 'transfer', 'fee']);
 const ACCOUNT_TYPES = new Set(['checking', 'credit', 'savings', 'brokerage', 'other']);
 const CARD_POLICIES = new Set(['will_import', 'payments_are_spending']);
 
+/** Check a folder path typed by the user and make sure we can write there. Returns the absolute path. */
+function prepareFolder(input: unknown): string {
+  const raw = typeof input === 'string' ? input.trim().replace(/^["']|["']$/g, '') : '';
+  if (!raw) throw new BadRequest('Enter a folder path');
+  if (!path.isAbsolute(raw)) throw new BadRequest('Enter a full folder path, for example C:\\Users\\you\\Documents\\WalletWhisper');
+  const folder = path.resolve(raw);
+  try {
+    fs.mkdirSync(folder, { recursive: true });
+    fs.accessSync(folder, fs.constants.W_OK);
+  } catch {
+    throw new BadRequest(`WalletWhisper can't create or write to "${folder}". Choose another folder.`);
+  }
+  return folder;
+}
+
 export async function createServer() {
-  const db = getDb();
-  backfillLast4(db);
-  recompute(db);
+  // Until the user picks a data folder (first run), only the setup endpoints work
+  let db!: Db;
+  let ready = false;
+  const openData = () => {
+    db = getDb();
+    backfillLast4(db);
+    recompute(db);
+    ready = true;
+  };
+  if (isSetUp()) openData();
 
   const app = express();
   app.disable('x-powered-by');
   app.use(requestGuard);
   app.use(express.json({ limit: '1mb' }));
+  app.use('/api', (req, res, next) => {
+    if (ready || req.path === '/session' || req.path === '/setup') return next();
+    res.status(409).json({ error: 'Choose where to store your data first', setupRequired: true });
+  });
 
   const upload = multer({
     storage: multer.memoryStorage(), // raw CSVs are never written to disk
@@ -58,6 +85,19 @@ export async function createServer() {
   app.get('/api/session', (_req, res) => {
     res.set('Cache-Control', 'no-store').json({ token: SESSION_TOKEN });
   });
+
+  // ---------- First-run setup: choose the data folder ----------
+  app.get('/api/setup', (_req, res) => {
+    res.json({ configured: ready, suggestedFolder: suggestedDataFolder() });
+  });
+
+  app.post('/api/setup', h((req, res) => {
+    if (ready) throw new BadRequest('WalletWhisper is already set up. Change the data folder in Settings.');
+    const folder = prepareFolder(req.body?.folder);
+    updateConfig({ dataFolder: folder });
+    openData();
+    res.json({ success: true, dataFolder: folder });
+  }));
 
   // ---------- Imports ----------
   app.post('/api/imports/preview', upload.array('files'), h((req, res) => {
@@ -374,13 +414,46 @@ export async function createServer() {
 
   // ---------- Settings ----------
   app.get('/api/settings', h((_req, res) => {
+    const ai = aiStatus();
     res.json({
       oneTimeThresholdCents: oneTimeThreshold(db),
-      aiConfigured: hasLlmKey(),
-      // Shown on the About page so people can see exactly where their data lives
-      databaseFile: dbPath() === ':memory:' ? null : path.resolve(dbPath()),
-      backupFolder: path.resolve(backupDir()),
+      dataFolder: currentDataFolder(),
+      aiConfigured: ai.provider !== null,
+      aiProvider: ai.providerName,
+      aiKeyInEnvFile: ai.fromEnvFile,
     });
+  }));
+
+  // Save or remove the AI key. It goes to the user's settings file, never into the project folder.
+  app.put('/api/settings/ai', h((req, res) => {
+    const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+    if (key) {
+      const provider = detectProvider(key);
+      if (!provider) throw new BadRequest("That doesn't look like a Claude, Gemini or OpenAI API key. Copy the whole key and try again.");
+      updateConfig({ aiKey: key });
+      audit(db, 'ai_key_saved', { provider });
+      res.json({ success: true, aiProvider: PROVIDER_NAMES[provider] });
+    } else {
+      updateConfig({ aiKey: undefined });
+      audit(db, 'ai_key_removed', {});
+      res.json({ success: true, aiProvider: aiStatus().providerName });
+    }
+  }));
+
+  // Move the data to another folder. The old copy is left in place for the user to delete.
+  app.post('/api/settings/data-folder', h((req, res) => {
+    const current = currentDataFolder();
+    if (!current) throw new BadRequest('The data folder cannot be changed in this mode');
+    const folder = prepareFolder(req.body?.folder);
+    if (path.resolve(folder) === path.resolve(current)) throw new BadRequest('That is already your data folder');
+    const target = path.join(folder, 'app.db');
+    if (fs.existsSync(target)) throw new BadRequest('That folder already has WalletWhisper data in it. Choose an empty folder.');
+    db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+    audit(db, 'data_folder_moved', { to: folder });
+    resetDbInstance();
+    updateConfig({ dataFolder: folder });
+    openData();
+    res.json({ success: true, dataFolder: folder, oldFolder: current });
   }));
 
   app.patch('/api/settings', h((req, res) => {
@@ -440,13 +513,4 @@ export async function createServer() {
   }
 
   return app;
-}
-
-function hasLlmKey(): boolean {
-  if (process.env.LLM_API_KEY) return true;
-  try {
-    return /^\s*LLM_API_KEY\s*=\s*\S+/m.test(fs.readFileSync(path.resolve(process.cwd(), '.env'), 'utf-8'));
-  } catch {
-    return false;
-  }
 }

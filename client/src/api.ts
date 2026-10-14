@@ -27,8 +27,22 @@ export const api = {
   get: <T>(url: string) => request<T>('GET', url),
   post: <T>(url: string, body?: unknown) => request<T>('POST', url, body),
   patch: <T>(url: string, body?: unknown) => request<T>('PATCH', url, body),
+  put: <T>(url: string, body?: unknown) => request<T>('PUT', url, body),
   del: <T>(url: string) => request<T>('DELETE', url),
 };
+
+export interface Settings {
+  oneTimeThresholdCents: number;
+  dataFolder: string | null;
+  aiConfigured: boolean;
+  aiProvider: string | null;
+  aiKeyInEnvFile: boolean;
+}
+
+export interface SetupInfo {
+  configured: boolean;
+  suggestedFolder: string;
+}
 
 export function qs(params: Record<string, string | number | boolean | undefined | null>): string {
   const p = new URLSearchParams();

@@ -2,18 +2,37 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { runMigrations } from './migrations.js';
+import { dataFolder } from './config.js';
 
 export type Db = Database.Database;
 
 let dbInstance: Db | null = null;
 
-/** Path of the live database. Tests set SPENDING_DB_PATH=':memory:' so they never touch real data. */
+/**
+ * The folder the user chose for their data (app.db + backups/), or null before first-run setup.
+ * Tests set SPENDING_DB_PATH=':memory:' so they never touch real data.
+ */
+export function currentDataFolder(): string | null {
+  if (process.env.SPENDING_DB_PATH) return null;
+  return dataFolder();
+}
+
+export function isSetUp(): boolean {
+  return !!process.env.SPENDING_DB_PATH || currentDataFolder() !== null;
+}
+
+/** Path of the live database. */
 export function dbPath(): string {
-  return process.env.SPENDING_DB_PATH || path.resolve(process.cwd(), 'data', 'app.db');
+  if (process.env.SPENDING_DB_PATH) return process.env.SPENDING_DB_PATH;
+  const folder = currentDataFolder();
+  if (!folder) throw new Error('No data folder chosen yet');
+  return path.join(folder, 'app.db');
 }
 
 export function backupDir(): string {
-  return process.env.SPENDING_BACKUP_DIR || path.resolve(process.cwd(), 'data', 'backups');
+  if (process.env.SPENDING_BACKUP_DIR) return process.env.SPENDING_BACKUP_DIR;
+  const folder = currentDataFolder();
+  return path.join(folder ?? path.resolve(process.cwd(), 'data'), 'backups');
 }
 
 /** Open a database, enable WAL + foreign keys, and bring the schema up to date. */

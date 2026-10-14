@@ -276,7 +276,7 @@ function DangerZone() {
   const act = useAction();
   const [text, setText] = useState('');
   return (
-    <Card title="Reset all data" subtitle="Deletes all transactions, imports, accounts and remembered choices. A backup is saved in data/backups first.">
+    <Card title="Reset all data" subtitle="Deletes all transactions, imports, accounts and remembered choices. A backup is saved in your data folder first.">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-ink-2">Type <b className="text-ink">DELETE ALL</b> to confirm:</span>
         <input className={`${inputClass} w-36`} value={text} onChange={e => setText(e.target.value)} />

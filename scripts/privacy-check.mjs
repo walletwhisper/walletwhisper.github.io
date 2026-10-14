@@ -15,6 +15,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { createRequire } from 'node:module';
 
 const ROOT = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
@@ -49,6 +50,14 @@ const SECRET_PATTERNS = [
 // Lock files are machine-generated hashes; only secret formats are checked there
 const SKIP_PERSONAL = /(^|\/)package-lock\.json$|\.(png|jpe?g|gif|ico|woff2?)$/i;
 
+/** WalletWhisper settings file (data folder, AI key); lives outside the repo */
+function appSettings() {
+  try {
+    const file = process.env.WALLETWHISPER_CONFIG || path.join(os.homedir(), '.walletwhisper', 'config.json');
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch { return {}; }
+}
+
 function localSecrets() {
   const out = [];
   try {
@@ -58,6 +67,11 @@ function localSecrets() {
       if (m && m[3].length >= 8) out.push({ term: m[3].replace(/^['"]|['"]$/g, ''), label: `value of ${m[1]} from .env` });
     }
   } catch { /* no .env */ }
+  // AI key saved from the app's Settings screen (outside the repo, but never allowed into it)
+  try {
+    const { aiKey } = appSettings();
+    if (typeof aiKey === 'string' && aiKey.length >= 8) out.push({ term: aiKey, label: 'AI key saved in WalletWhisper settings' });
+  } catch { /* no settings file */ }
   return out;
 }
 
@@ -67,7 +81,7 @@ function personalTerms() {
   try {
     const require = createRequire(path.join(ROOT, 'package.json'));
     const Database = require('better-sqlite3');
-    const dbFile = path.join(ROOT, 'data', 'app.db');
+    const dbFile = path.join(appSettings().dataFolder || path.join(ROOT, 'data'), 'app.db');
     if (fs.existsSync(dbFile)) {
       const db = new Database(dbFile, { readonly: true, fileMustExist: true });
       try {

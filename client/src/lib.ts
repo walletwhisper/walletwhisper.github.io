@@ -40,8 +40,8 @@ export function median(values: number[]): number {
 
 // ---------- Routing: #/screen?filters, so views can be bookmarked and survive a refresh ----------
 
-export type Screen = 'overview' | 'trends' | 'transactions' | 'review' | 'accounts' | 'about';
-const SCREENS: Screen[] = ['overview', 'trends', 'transactions', 'review', 'accounts', 'about'];
+export type Screen = 'overview' | 'trends' | 'transactions' | 'review' | 'accounts' | 'settings' | 'about';
+const SCREENS: Screen[] = ['overview', 'trends', 'transactions', 'review', 'accounts', 'settings', 'about'];
 
 export type Params = Record<string, string>;
 
