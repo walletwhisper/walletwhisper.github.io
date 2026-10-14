@@ -5,6 +5,7 @@ import { useFetch, useStore } from '../store';
 import { formatCents, monthLabel, shortMoney, shortMonth, useRoute } from '../lib';
 import { Card, Chip, Dot, Empty, Segmented, inputClass, tooltipClass } from '../ui';
 import { AskBox } from '../AskBox';
+import { CashFlow } from '../CashFlow';
 
 const STACKS = [
   { id: 'category', label: 'Category' },
@@ -44,6 +45,8 @@ export function Trends() {
   return (
     <div className="space-y-6">
       <AskBox />
+      {data && <CashFlow data={data} categoryFiltered={!!params.cat}
+        onPick={month => navigate('transactions', { kind: 'all', month, person: params.person ?? '', acct: params.acct ?? '' })} />}
       <Card
         title="Spending over time"
         subtitle="Click a bar segment to see those transactions · faded bars are months with missing statements"
