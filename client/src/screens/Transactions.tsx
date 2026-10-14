@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Eye, EyeOff, Search, X, Link2, Sparkles, Users } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Eye, EyeOff, Search, X, Link2, Sparkles, Users } from 'lucide-react';
 import { api, qs } from '../api';
 import type { Settings, Summary, Txn, TxnList } from '../api';
 import { useFetch, useStore } from '../store';
@@ -12,6 +12,12 @@ const KIND_TABS = [
   { id: 'income', label: 'Income' },
   { id: 'all', label: 'All' },
 ];
+
+type SortColumn = 'date' | 'merchant' | 'account' | 'person' | 'category' | 'amount';
+/** First click: newest / largest first for date and amount, A→Z for names (same as the server). */
+const DEFAULT_DIR: Record<SortColumn, 'asc' | 'desc'> = {
+  date: 'desc', amount: 'desc', merchant: 'asc', account: 'asc', person: 'asc', category: 'asc',
+};
 
 const VIA_LABEL: Record<string, string> = {
   pair: 'Matched with',
@@ -42,7 +48,7 @@ export function Transactions() {
 
   const { data } = useFetch<TxnList>(`/api/transactions${qs({
     ...range, kind, categoryId: params.cat, personId: params.person, accountId: params.acct, q: params.q,
-    sort: params.sort, hidden: params.hidden,
+    sort: params.sort, dir: params.dir, hidden: params.hidden,
   })}`);
 
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -65,6 +71,30 @@ export function Transactions() {
       refresh();
     } catch (e: any) { toast(e.message); }
   };
+  // Click a column header to sort by it; click again to reverse
+  const sortCol = (params.sort as SortColumn) || 'date';
+  const sortDir = (params.dir as 'asc' | 'desc') || DEFAULT_DIR[sortCol];
+  const sortBy = (col: SortColumn) => {
+    if (col === sortCol) set({ sort: col === 'date' ? '' : col, dir: sortDir === 'asc' ? 'desc' : 'asc' });
+    else set({ sort: col === 'date' ? '' : col, dir: '' });
+  };
+  const header = (col: SortColumn, label: string, align: 'left' | 'right' = 'left') => {
+    const active = col === sortCol;
+    const Icon = !active ? ArrowUpDown : sortDir === 'asc' ? ArrowUp : ArrowDown;
+    const hint = col === 'date' ? (sortDir === 'desc' && active ? 'oldest first' : 'newest first')
+      : col === 'amount' ? (sortDir === 'desc' && active ? 'smallest first' : 'largest first')
+      : (sortDir === 'asc' && active ? 'Z to A' : 'A to Z');
+    return (
+      <th className={`px-3 py-3 ${align === 'right' ? 'text-right' : ''}`} aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+        <button onClick={() => sortBy(col)} title={`Sort by ${label.toLowerCase()}: ${hint}`}
+          className={`inline-flex items-center gap-1 uppercase tracking-wider cursor-pointer hover:text-ink ${active ? 'text-ink font-semibold' : ''} ${align === 'right' ? 'flex-row-reverse' : ''}`}>
+          {label}
+          <Icon className={`w-3 h-3 ${active ? 'text-accent' : 'opacity-40'}`} />
+        </button>
+      </th>
+    );
+  };
+
   const setHidden = async (ids: number[], hidden: boolean) => {
     try {
       await api.patch('/api/transactions', { ids, hidden });
@@ -118,10 +148,6 @@ export function Transactions() {
               <Search className="w-3.5 h-3.5 text-muted absolute left-2.5 top-2" />
               <input className={`${inputClass} pl-8 w-44`} placeholder="Search merchant…" value={search} onChange={e => setSearch(e.target.value)} />
             </div>
-            <select className={inputClass} value={params.sort || ''} onChange={e => set({ sort: e.target.value })} aria-label="Sort">
-              <option value="">Newest first</option>
-              <option value="amount">Largest amount first</option>
-            </select>
             <Button onClick={runAi} disabled={aiBusy} title={aiReady
               ? 'Sends cleaned merchant descriptions, amounts, account type and bank category to your AI provider. Never account numbers, balances, dates or names.'
               : 'Optional: add your own AI API key in Settings to use this'}>
@@ -177,12 +203,12 @@ export function Transactions() {
                   <input type="checkbox" aria-label="Select all" checked={allSelected}
                     onChange={() => setSelected(allSelected ? new Set() : new Set(rows.map(r => r.id)))} />
                 </th>
-                <th className="px-3 py-3">Date</th>
-                <th className="px-3 py-3">Merchant</th>
-                <th className="px-3 py-3">Account</th>
-                <th className="px-3 py-3">Person</th>
-                <th className="px-3 py-3">Category</th>
-                <th className="px-3 py-3 text-right">Amount</th>
+                {header('date', 'Date')}
+                {header('merchant', 'Merchant')}
+                {header('account', 'Account')}
+                {header('person', 'Person')}
+                {header('category', 'Category')}
+                {header('amount', 'Amount', 'right')}
                 {kind === 'spending' && <th className="px-3 py-3 text-center" title="Untick to leave a transaction out of every chart and total">In charts</th>}
               </tr>
             </thead>

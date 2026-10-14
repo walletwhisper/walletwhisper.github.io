@@ -12,10 +12,34 @@ export interface Filters {
   personId?: number | 'none';
   accountId?: number;
   q?: string;
-  /** Transactions list: newest first (default) or largest amount first */
-  sort?: 'date' | 'amount';
+  /** Transactions list: column to sort by (default date) and direction (default depends on the column) */
+  sort?: SortColumn;
+  dir?: 'asc' | 'desc';
   /** Transactions list: only the ones left out of the charts */
   hiddenOnly?: boolean;
+}
+
+export type SortColumn = 'date' | 'merchant' | 'account' | 'person' | 'category' | 'amount';
+const SORT_COLUMNS: SortColumn[] = ['date', 'merchant', 'account', 'person', 'category', 'amount'];
+
+/** First click on a column header: newest / largest first for date and amount, A→Z for names. */
+export const DEFAULT_DIR: Record<SortColumn, 'asc' | 'desc'> = {
+  date: 'desc', amount: 'desc', merchant: 'asc', account: 'asc', person: 'asc', category: 'asc',
+};
+
+/** ORDER BY for the transactions list. Blank people always sort last; ties fall back to newest first. */
+function orderBy(f: Filters): string {
+  const col = f.sort ?? 'date';
+  const dir = (f.dir ?? DEFAULT_DIR[col]).toUpperCase();
+  const key: Record<SortColumn, string> = {
+    date: `t.txn_date ${dir}, t.id ${dir}`,
+    amount: `t.amount_cents ${dir}`,
+    merchant: `t.merchant COLLATE NOCASE ${dir}`,
+    account: `COALESCE(a.nickname, a.bank) COLLATE NOCASE ${dir}, a.last4 ${dir}`,
+    person: `p.name IS NULL, p.name COLLATE NOCASE ${dir}`,
+    category: `c.name COLLATE NOCASE ${dir}`,
+  };
+  return col === 'date' ? key.date : `${key[col]}, t.txn_date DESC, t.id DESC`;
 }
 
 /** Parse query-string filters, ignoring anything malformed. */
@@ -32,7 +56,8 @@ export function parseFilters(q: Record<string, unknown>): Filters {
     personId: person === 'none' ? 'none' : int('personId'),
     accountId: int('accountId'),
     q: str('q')?.slice(0, 100),
-    sort: str('sort') === 'amount' ? 'amount' : undefined,
+    sort: SORT_COLUMNS.includes(str('sort') as SortColumn) ? (str('sort') as SortColumn) : undefined,
+    dir: str('dir') === 'asc' || str('dir') === 'desc' ? (str('dir') as 'asc' | 'desc') : undefined,
     hiddenOnly: str('hidden') === '1'
   };
 }
@@ -339,7 +364,7 @@ export function getTransactions(db: Db, f: Filters, kind: string, limit = 2000) 
     LEFT JOIN transfer_links l ON l.out_txn_id = t.id OR l.in_txn_id = t.id
     LEFT JOIN transactions partner ON partner.id = CASE WHEN l.out_txn_id = t.id THEN l.in_txn_id ELSE l.out_txn_id END
     WHERE ${where}
-    ORDER BY ${f.sort === 'amount' ? 'ABS(t.amount_cents) DESC,' : ''} t.txn_date DESC, t.id DESC
+    ORDER BY ${orderBy(f)}
     LIMIT ?`).all(...w.params, limit) as any[];
 
   const transactions = rows.map(r => ({
