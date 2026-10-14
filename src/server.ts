@@ -2,12 +2,13 @@ import express, { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { audit, backupDb, currentDataFolder, Db, getDb, isSetUp, resetDbInstance, setSetting } from './db.js';
+import { audit, backupDb, currentDataFolder, Db, getDb, isSetUp, resetDbInstance } from './db.js';
 import { suggestedDataFolder, updateConfig } from './config.js';
 import { AccountChoice, backfillLast4, finishImports, importCsvContent, previewCsv, accountLabel } from './importer.js';
-import { aiStatus, detectProvider, PROVIDER_NAMES, recategorizeWithLlm } from './llm.js';
+import { aiStatus, detectProvider, planQuestion, PROVIDER_NAMES, recategorizeWithLlm } from './llm.js';
+import { answerQuestion } from './ask.js';
 import { parseList, recompute, saveDecision } from './ledger.js';
-import { answerReview, getReviewItems, linkManually, oneTimeThreshold, pickColor, ReviewAnswer, setKindManually, unlink } from './review.js';
+import { answerReview, getReviewItems, linkManually, pickColor, ReviewAnswer, setKindManually, unlink } from './review.js';
 import { getCoverage, getSummary, getTransactions, getTrends, parseFilters, StackBy } from './reports.js';
 import { requestGuard, RESET_CONFIRMATION, SESSION_TOKEN } from './security.js';
 
@@ -202,8 +203,8 @@ export async function createServer() {
         if (!KINDS.has(body.kind)) throw new BadRequest('Unknown kind');
         setKindManually(db, id, body.kind);
       }
-      if (body.isOneTime !== undefined) {
-        const v = body.isOneTime ? 1 : 0;
+      if (body.hidden !== undefined) {
+        const v = body.hidden ? 1 : 0;
         db.prepare('UPDATE transactions SET is_one_time = ? WHERE id = ?').run(v, id);
         saveDecision(db, txn.fingerprint, { is_one_time: v });
       }
@@ -214,7 +215,7 @@ export async function createServer() {
 
   // Bulk: assign a person (or category) to many rows at once
   app.patch('/api/transactions', h((req, res) => {
-    const { ids, personId, categoryId } = req.body || {};
+    const { ids, personId, categoryId, hidden } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0 || ids.length > 5000 || !ids.every((x: unknown) => Number.isInteger(x))) {
       throw new BadRequest('ids must be a non-empty list of transaction ids');
     }
@@ -233,6 +234,11 @@ export async function createServer() {
         if (categoryId !== undefined) {
           db.prepare("UPDATE transactions SET category_id = ?, category_source = 'manual' WHERE id = ?").run(categoryId, id);
           saveDecision(db, row.fingerprint, { category_id: categoryId });
+        }
+        if (hidden !== undefined) {
+          const v = hidden ? 1 : 0;
+          db.prepare('UPDATE transactions SET is_one_time = ? WHERE id = ?').run(v, id);
+          saveDecision(db, row.fingerprint, { is_one_time: v });
         }
         updated++;
       }
@@ -259,7 +265,7 @@ export async function createServer() {
 
   // ---------- Review inbox ----------
   app.get('/api/review', h((_req, res) => {
-    res.json({ items: getReviewItems(db), oneTimeThresholdCents: oneTimeThreshold(db) });
+    res.json({ items: getReviewItems(db) });
   }));
 
   app.post('/api/review/answer', h((req, res) => {
@@ -416,7 +422,6 @@ export async function createServer() {
   app.get('/api/settings', h((_req, res) => {
     const ai = aiStatus();
     res.json({
-      oneTimeThresholdCents: oneTimeThreshold(db),
       dataFolder: currentDataFolder(),
       aiConfigured: ai.provider !== null,
       aiProvider: ai.providerName,
@@ -456,11 +461,17 @@ export async function createServer() {
     res.json({ success: true, dataFolder: folder, oldFolder: current });
   }));
 
-  app.patch('/api/settings', h((req, res) => {
-    const v = Number(req.body?.oneTimeThresholdCents);
-    if (!Number.isInteger(v) || v < 10_000) throw new BadRequest('Threshold must be at least $100');
-    setSetting(db, 'one_time_threshold_cents', String(v));
-    res.json({ success: true });
+  // ---------- Ask (opt-in AI) ----------
+  // Only the question, today's date and category names go to the AI; the answer is computed here
+  app.post('/api/ask', h(async (req, res) => {
+    const question = typeof req.body?.question === 'string' ? req.body.question.trim() : '';
+    if (!question) throw new BadRequest('Type a question first');
+    if (question.length > 300) throw new BadRequest('Please keep the question under 300 characters');
+    const categoryNames = (db.prepare('SELECT name FROM categories ORDER BY name').all() as { name: string }[])
+      .map(c => c.name).filter(n => !['Transfer', 'Income', 'Credit card (untracked)'].includes(n));
+    const today = new Date().toISOString().slice(0, 10);
+    const plan = await planQuestion(question, categoryNames, today);
+    res.json(answerQuestion(db, plan));
   }));
 
   // ---------- AI (opt-in) ----------

@@ -9,7 +9,7 @@ WalletWhisper turns the CSV statements you download from your banks into one cle
 > - **WalletWhisper is a program you run on your own computer.** There is no WalletWhisper server, no sign-up and no tracking. GitHub only hosts the code; your statements never go there.
 > - **You choose where your data is kept.** The first time you start the app, it asks which folder to use. Your transactions, people, choices and automatic backups all stay in that folder, and you can move it later in **Settings**.
 > - **Only you can open it.** The app only accepts connections from your own computer, so other devices and websites can't read your data.
-> - **AI is optional.** It's off unless you add your own AI key, and nothing is sent until you press **AI categorize**.
+> - **AI is optional.** It's off unless you add your own AI key. Asking a question sends only your words; the answer is calculated on your computer.
 >
 > To delete everything, use **Accounts → Reset all data**, or delete your data folder.
 
@@ -26,7 +26,7 @@ WalletWhisper turns the CSV statements you download from your banks into one cle
   - A monthly overview with a category donut and "biggest changes vs. your typical month".
   - Stacked trends by category, person or account. Months with missing statements are flagged.
 - **Who spent what.** Mark any transaction with a household member, select many rows at once, or set a default person per account.
-- **One-time items** (a house closing, a big wire) are kept separate, so they don't distort your normal monthly pattern.
+- **You decide what's in the charts.** Sort transactions by amount and untick any (a house deposit, a big wire) to leave it out of every chart and total. Tick it again any time.
 - **Undo and backups.**
   - Undo any import.
   - Reset asks you to type a confirmation.
@@ -45,17 +45,28 @@ npm start        # builds the interface and opens it in your browser
 
 Choose a folder for your data, then download CSV statements from your bank's website and drop them onto the page, or click **Import**.
 
-### Optional: AI categories
+### Optional: the AI assistant
 
-WalletWhisper works fully without AI: categories come from built-in rules and your own corrections. If you'd like AI suggestions for merchants it doesn't recognize:
+WalletWhisper works fully without AI. With your own AI key you can also:
 
-1. Create an API key with your AI provider. Claude, Gemini and OpenAI keys all work.
-2. In WalletWhisper, open **Settings** and paste the key. It's saved on your computer only.
-3. On the Transactions screen, press **AI categorize** whenever you want suggestions.
+- **Ask questions** on the Overview and Trends screens, for example *"How much did we spend on dining last month?"*. You get the total, how it compares with the month before and the same time last year, a 13-month chart, and where the money went.
+- **Get category suggestions** for merchants it doesn't recognize (**AI categorize** on Transactions).
 
-Without a key, everything else works as normal; only **AI categorize** is unavailable.
+To set it up:
 
-When you press the button, only cleaned merchant descriptions, amounts, the account type (checking or credit) and the bank's own category are sent to your AI provider. Account numbers, balances, dates and names are never sent. The AI only suggests spending categories and never overrides a choice you made.
+1. Get an API key from one AI provider:
+   - **Claude**: [console.anthropic.com](https://console.anthropic.com/settings/keys) → API keys → Create key.
+   - **ChatGPT**: [platform.openai.com](https://platform.openai.com/api-keys) → API keys → Create new secret key.
+   - **Gemini**: [aistudio.google.com](https://aistudio.google.com/apikey) → Get API key → Create API key.
+2. In WalletWhisper, open **Settings → AI assistant** and paste it. It's saved on your computer only.
+
+Without a key, everything else works as normal; only the AI features are unavailable.
+
+**What is sent, and when.** Nothing is sent until you ask a question or press **AI categorize**.
+- **Asking a question:** only your words and the category names are sent, so the AI can understand what you mean. Every number is calculated on your computer.
+- **AI categorize:** cleaned merchant descriptions, amounts, account type and the bank's own category are sent.
+
+Account numbers, balances, dates and names are never sent.
 
 ## For developers
 

@@ -7,26 +7,13 @@ import { formatCents } from '../lib';
 import { Button, Card, Empty, inputClass } from '../ui';
 
 export function Review() {
-  const { data } = useFetch<{ items: ReviewItem[]; oneTimeThresholdCents: number }>('/api/review');
-  const { refresh, toast } = useStore();
-  const [threshold, setThreshold] = useState('');
-
-  const saveThreshold = async () => {
-    const dollars = Number(threshold);
-    if (!Number.isFinite(dollars) || dollars < 100) return toast('Enter an amount of at least $100');
-    try {
-      await api.patch('/api/settings', { oneTimeThresholdCents: Math.round(dollars * 100) });
-      setThreshold('');
-      refresh();
-    } catch (e: any) { toast(e.message); }
-  };
+  const { data } = useFetch<{ items: ReviewItem[] }>('/api/review');
 
   if (!data) return <Card><Empty>Loading…</Empty></Card>;
   const groups: { type: ReviewItem['type']; title: string; hint: string }[] = [
     { type: 'unmatched_transfer', title: 'Transfers we couldn’t match', hint: 'Tell us which of your accounts this money moved to or from. You answer once per kind of payment.' },
     { type: 'ambiguous_pair', title: 'Which one is the other side?', hint: 'Several rows could be the matching side of these transfers.' },
     { type: 'p2p_name', title: 'Person-to-person payments', hint: 'Money between household members is not spending or income.' },
-    { type: 'one_time', title: 'Large one-time payments', hint: 'Show them separately so normal monthly trends stay readable.' },
   ];
 
   return (
@@ -50,14 +37,6 @@ export function Review() {
           </Card>
         );
       })}
-
-      <Card title="Settings">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-ink-2">
-          Suggest "one-time" for single payments over {formatCents(data.oneTimeThresholdCents)}. Change to $
-          <input className={`${inputClass} w-28`} inputMode="decimal" value={threshold} onChange={e => setThreshold(e.target.value)} placeholder="5000" />
-          <Button onClick={saveThreshold} disabled={!threshold}>Save</Button>
-        </div>
-      </Card>
     </div>
   );
 }
@@ -135,13 +114,6 @@ function ReviewCard({ item }: { item: ReviewItem }) {
 
         {item.type === 'p2p_name' && <Household item={item} busy={busy} onAnswer={answer} people={people} />}
 
-        {item.type === 'one_time' && (
-          <div className="flex flex-wrap gap-2">
-            <Button variant="primary" disabled={busy} onClick={() => answer({ action: 'one_time', txnIds: ids, value: true })}>One-time, show separately</Button>
-            <Button disabled={busy} onClick={() => answer({ action: 'one_time', txnIds: ids, value: false })}>Normal spending</Button>
-            <Button variant="ghost" disabled={busy} onClick={() => answer({ action: 'set_kind', txnIds: ids, kind: 'transfer' })}>It went to one of our accounts</Button>
-          </div>
-        )}
       </div>
     </div>
   );

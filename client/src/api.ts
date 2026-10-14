@@ -32,7 +32,6 @@ export const api = {
 };
 
 export interface Settings {
-  oneTimeThresholdCents: number;
   dataFolder: string | null;
   aiConfigured: boolean;
   aiProvider: string | null;
@@ -56,13 +55,14 @@ export function qs(params: Record<string, string | number | boolean | undefined 
 // ---------- Types returned by the API ----------
 
 export interface Slice { id: number | null; name: string; color: string; cents: number; count: number; pct: number; }
-export interface MonthTotal { month: string; cents: number; oneTimeCents: number; complete: boolean; }
+export interface MonthTotal { month: string; cents: number; hiddenCents: number; complete: boolean; }
 
 export interface Summary {
   totalSpend: number;
   totalTxnCount: number;
-  oneTimeCents: number;
-  oneTimeCount: number;
+  /** Spending the user left out of the charts */
+  hiddenCents: number;
+  hiddenCount: number;
   moneyIn: number;
   byCategory: Slice[];
   byPerson: Slice[];
@@ -76,7 +76,7 @@ export interface Summary {
 
 export interface Trends {
   stack: 'category' | 'person' | 'account';
-  months: { month: string; complete: boolean; totalCents: number; oneTimeCents: number; segments: Record<string, number> }[];
+  months: { month: string; complete: boolean; totalCents: number; hiddenCents: number; segments: Record<string, number> }[];
   series: { key: string; name: string; color: string; totalCents: number }[];
 }
 
@@ -98,7 +98,8 @@ export interface Txn {
   personSource: string | null;
   personName: string | null;
   personColor: string | null;
-  isOneTime: boolean;
+  /** Left out of every chart and total ("Show in charts" unticked) */
+  hidden: boolean;
   accountId: number;
   account: string;
   counterparty: string | null;
@@ -107,7 +108,7 @@ export interface Txn {
   partnerDate: string | null;
 }
 
-export interface TxnList { transactions: Txn[]; count: number; sumCents: number; truncated: boolean; }
+export interface TxnList { transactions: Txn[]; count: number; sumCents: number; hiddenCents: number; hiddenCount: number; truncated: boolean; }
 
 export interface Category { id: number; name: string; color: string; }
 export interface Person { id: number; name: string; color: string; aliases: string[]; txnCount: number; }
@@ -131,7 +132,7 @@ export interface Account {
 export interface ReviewTxn { id: number; date: string; account: string; description: string; amountCents: number; direction: string; }
 export interface ReviewItem {
   key: string;
-  type: 'unmatched_transfer' | 'ambiguous_pair' | 'p2p_name' | 'one_time';
+  type: 'unmatched_transfer' | 'ambiguous_pair' | 'p2p_name';
   title: string;
   detail: string;
   direction?: 'out' | 'in';
@@ -176,3 +177,20 @@ export interface ImportResponse {
   matched: { pairsLinked: number; accountMatches: number; householdTransfers: number };
   reviewCount: number;
 }
+
+export interface PeriodTotal { label: string; from: string; to: string; cents: number; count: number; }
+export type AskAnswer =
+  | { understood: false; clarification: string }
+  | {
+      understood: true;
+      headline: string;
+      subject: string;
+      period: PeriodTotal;
+      previous: PeriodTotal;
+      lastYear: PeriodTotal;
+      months: { month: string; cents: number; inPeriod: boolean }[];
+      topMerchants: { merchant: string; cents: number; count: number }[];
+      byCategory: { id: number; name: string; color: string; cents: number }[];
+      filters: { categoryIds: number[]; personId: number | null; merchant: string | null };
+      notes: string[];
+    };

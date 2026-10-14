@@ -4,7 +4,6 @@ import { findPairCandidates, P2P_RE, parseList, recompute, saveDecision } from '
 import { accountLabel } from './importer.js';
 import { UserError } from './errors.js';
 
-export const DEFAULT_ONE_TIME_THRESHOLD_CENTS = 500_000; // $5,000
 export const P2P_REVIEW_MIN_CENTS = 50_000; // $500: smaller P2P payments are assumed to be ordinary spending
 
 export interface ReviewTxn {
@@ -18,7 +17,7 @@ export interface ReviewTxn {
 
 export interface ReviewItem {
   key: string;
-  type: 'unmatched_transfer' | 'ambiguous_pair' | 'p2p_name' | 'one_time';
+  type: 'unmatched_transfer' | 'ambiguous_pair' | 'p2p_name';
   title: string;
   detail: string;
   direction?: 'out' | 'in';
@@ -84,10 +83,6 @@ export function extractP2PName(description: string): string | null {
     if (name.length === 3) break;
   }
   return name.length > 0 ? name.join(' ') : null;
-}
-
-export function oneTimeThreshold(db: Db): number {
-  return Number(getSetting(db, 'one_time_threshold_cents', String(DEFAULT_ONE_TIME_THRESHOLD_CENTS)));
 }
 
 export function getReviewItems(db: Db): ReviewItem[] {
@@ -170,22 +165,6 @@ export function getReviewItems(db: Db): ReviewItem[] {
     });
   }
 
-  // 4. Very large single payments: one-time or normal spending?
-  const big = db.prepare(`${TXN_SELECT}
-    WHERE t.kind = 'spend' AND t.is_one_time IS NULL AND t.amount_cents >= ?
-    ORDER BY t.amount_cents DESC`).all(oneTimeThreshold(db)) as TxnRow[];
-  for (const r of big) {
-    items.push({
-      key: `onetime:${r.id}`,
-      type: 'one_time',
-      title: `Large payment: ${formatUsd(r.amountCents)} "${r.merchant}"`,
-      detail: 'One-time items (home closing, car, tuition) are shown separately so they don\'t hide your normal monthly pattern.',
-      count: 1,
-      totalCents: r.amountCents,
-      txns: [toReviewTxn(r)]
-    });
-  }
-
   return items;
 }
 
@@ -200,8 +179,7 @@ export type ReviewAnswer =
   | { action: 'keep_transfer'; txnIds: number[] }
   | { action: 'link'; outId: number; inId: number }
   | { action: 'household'; txnIds: number[]; name: string; personId?: number; newPersonName?: string }
-  | { action: 'not_household'; name: string }
-  | { action: 'one_time'; txnIds: number[]; value: boolean };
+  | { action: 'not_household'; name: string };
 
 const fingerprintOf = (db: Db, id: number) =>
   (db.prepare('SELECT fingerprint FROM transactions WHERE id = ?').get(id) as { fingerprint: string } | undefined)?.fingerprint;
@@ -296,13 +274,6 @@ export function answerReview(db: Db, a: ReviewAnswer): void {
         setSetting(db, 'p2p_not_household', JSON.stringify([...new Set(list)]));
         break;
       }
-      case 'one_time':
-        for (const id of a.txnIds) {
-          const fp = fingerprintOf(db, id);
-          db.prepare('UPDATE transactions SET is_one_time = ? WHERE id = ?').run(a.value ? 1 : 0, id);
-          if (fp) saveDecision(db, fp, { is_one_time: a.value ? 1 : 0 });
-        }
-        break;
       default:
         throw new UserError('Unknown review action');
     }

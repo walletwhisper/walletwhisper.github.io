@@ -25,7 +25,7 @@ function load(db: Db, ...files: string[]) {
 
 const row = (db: Db, like: string) =>
   db.prepare('SELECT * FROM transactions WHERE raw_description LIKE ?').get(`%${like}%`) as any;
-const spending = (db: Db, includeOneTime = true) => getSummary(db, { includeOneTime }).totalSpend;
+const spending = (db: Db) => getSummary(db, {}).totalSpend;
 const accountIdByLast4 = (db: Db, last4: string) =>
   (db.prepare('SELECT id FROM accounts WHERE last4 = ?').get(last4) as { id: number }).id;
 
@@ -193,7 +193,7 @@ describe('Counting every dollar once', () => {
     answerReview(db, { action: 'assign_account', txnIds: [target.id], pattern: 'TARGET CARD SRVC',
       newAccount: { nickname: 'Target RedCard', accountType: 'credit', cardPolicy: 'payments_are_spending' } });
     expect(spending(db)).toBe(before + expected.untrackedTargetCardCents);
-    const cat = getSummary(db, { includeOneTime: true }).byCategory.find((c: any) => c.name === 'Credit card (untracked)');
+    const cat = getSummary(db, {}).byCategory.find((c: any) => c.name === 'Credit card (untracked)');
     expect(cat.cents).toBe(expected.untrackedTargetCardCents);
   });
 
@@ -221,26 +221,31 @@ describe('Counting every dollar once', () => {
     expect(getReviewItems(db).some(i => i.type === 'p2p_name')).toBe(false);
   });
 
-  it('X-10: one-time items are excluded from normal totals and reported separately', () => {
+  it('X-10: a transaction unticked from the charts leaves every chart and total but stays listed', () => {
     load(db, CREDIT, CHECKING);
-    const item = getReviewItems(db).find(i => i.type === 'one_time')!;
-    expect(item.totalCents).toBe(expected.oneTimeCents);
-    answerReview(db, { action: 'one_time', txnIds: [item.txns[0].id], value: true });
+    const wire = row(db, 'CLOSING COSTS');
+    expect(wire.amount_cents).toBe(expected.oneTimeCents);
+    expect(getTransactions(db, { sort: 'amount' }, 'spending').transactions[0].id).toBe(wire.id); // largest first
+    db.prepare('UPDATE transactions SET is_one_time = 1 WHERE id = ?').run(wire.id);
     const s = getSummary(db, {});
-    expect(s.oneTimeCents).toBe(expected.oneTimeCents);
+    expect(s.hiddenCents).toBe(expected.oneTimeCents);
     expect(s.totalSpend).toBe(expected.creditSpendingCents + expected.checkingSpendingBeforeReviewCents - expected.oneTimeCents);
     expect(s.byMonth.find((m: any) => m.month === '2026-10')!.cents).toBe(s.totalSpend);
+    const list = getTransactions(db, {}, 'spending');
+    expect(list.transactions.find(t => t.id === wire.id)!.hidden).toBe(true);
+    expect(list.sumCents).toBe(s.totalSpend);
+    expect(getTransactions(db, { hiddenOnly: true }, 'spending').transactions.map(t => t.id)).toEqual([wire.id]);
   });
 
   it('X-11/A-01: every breakdown adds up to the same total', () => {
     load(db, CREDIT, CHECKING);
-    const s = getSummary(db, { includeOneTime: true });
+    const s = getSummary(db, {});
     const sum = (xs: { cents: number }[]) => xs.reduce((a, x) => a + x.cents, 0);
     expect(sum(s.byCategory)).toBe(s.totalSpend);
     expect(sum(s.byPerson)).toBe(s.totalSpend);
     expect(sum(s.byAccount)).toBe(s.totalSpend);
-    expect(s.byMonth.reduce((a: number, m: any) => a + m.cents + m.oneTimeCents, 0)).toBe(s.totalSpend);
-    const t = getTransactions(db, { includeOneTime: true }, 'spending');
+    expect(s.byMonth.reduce((a: number, m: any) => a + m.cents + m.hiddenCents, 0)).toBe(s.totalSpend);
+    const t = getTransactions(db, {}, 'spending');
     expect(t.sumCents).toBe(s.totalSpend);
   });
 
@@ -323,7 +328,7 @@ describe('Categories, people, and decisions', () => {
     expect(row(db, 'SWEETGREEN')).toMatchObject({ person_id: sam, person_source: 'rule' });
     expect(row(db, 'TRADER JOE')).toMatchObject({ person_id: sam, person_source: 'manual' });
     expect(row(db, 'CON EDISON').person_id).toBeNull();
-    const s = getSummary(db, { personId: alex, includeOneTime: true });
+    const s = getSummary(db, { personId: alex });
     expect(s.byPerson.map((p: any) => p.name)).toEqual(['Alex']);
     expect(accountIdByLast4(db, '1234')).toBeGreaterThan(0);
   });

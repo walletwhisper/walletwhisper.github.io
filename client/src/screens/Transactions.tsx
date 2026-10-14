@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search, X, Link2, Sparkles, Users } from 'lucide-react';
+import { Eye, EyeOff, Search, X, Link2, Sparkles, Users } from 'lucide-react';
 import { api, qs } from '../api';
 import type { Settings, Summary, Txn, TxnList } from '../api';
 import { useFetch, useStore } from '../store';
@@ -30,7 +30,8 @@ export function Transactions() {
   const set = (patch: Record<string, string>) => navigate('transactions', { ...params, ...patch });
 
   const preset = params.preset || 'all';
-  const range = params.month ? { from: `${params.month}-01`, to: monthEnd(params.month) } : presetRange(preset, latest);
+  const range = params.from && params.to ? { from: params.from, to: params.to }
+    : params.month ? { from: `${params.month}-01`, to: monthEnd(params.month) } : presetRange(preset, latest);
   const kind = params.kind || 'spending';
   const [search, setSearch] = useState(params.q || '');
   useEffect(() => setSearch(params.q || ''), [params.q]);
@@ -41,7 +42,7 @@ export function Transactions() {
 
   const { data } = useFetch<TxnList>(`/api/transactions${qs({
     ...range, kind, categoryId: params.cat, personId: params.person, accountId: params.acct, q: params.q,
-    includeOneTime: params.onetime === '1',
+    sort: params.sort, hidden: params.hidden,
   })}`);
 
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -61,6 +62,12 @@ export function Transactions() {
     try {
       if (ids.length === 1) await api.patch(`/api/transactions/${ids[0]}`, { personId });
       else await api.patch('/api/transactions', { ids, personId });
+      refresh();
+    } catch (e: any) { toast(e.message); }
+  };
+  const setHidden = async (ids: number[], hidden: boolean) => {
+    try {
+      await api.patch('/api/transactions', { ids, hidden });
       refresh();
     } catch (e: any) { toast(e.message); }
   };
@@ -93,8 +100,9 @@ export function Transactions() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Segmented options={KIND_TABS} value={kind} onChange={id => set({ kind: id === 'spending' ? '' : id })} />
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <select className={inputClass} value={params.month ? '' : preset} onChange={e => set({ preset: e.target.value, month: '' })}>
+            <select className={inputClass} value={params.month || params.from ? '' : preset} onChange={e => set({ preset: e.target.value, month: '', from: '', to: '' })}>
               {params.month && <option value="">{monthLabel(params.month)}</option>}
+              {params.from && !params.month && <option value="">{params.from} – {params.to}</option>}
               {PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
             <select className={inputClass} value={params.person || ''} onChange={e => set({ person: e.target.value })}>
@@ -110,12 +118,10 @@ export function Transactions() {
               <Search className="w-3.5 h-3.5 text-muted absolute left-2.5 top-2" />
               <input className={`${inputClass} pl-8 w-44`} placeholder="Search merchant…" value={search} onChange={e => setSearch(e.target.value)} />
             </div>
-            {kind === 'spending' && (
-              <label className="flex items-center gap-1.5 text-ink-2 cursor-pointer">
-                <input type="checkbox" checked={params.onetime === '1'} onChange={e => set({ onetime: e.target.checked ? '1' : '' })} />
-                One-time items
-              </label>
-            )}
+            <select className={inputClass} value={params.sort || ''} onChange={e => set({ sort: e.target.value })} aria-label="Sort">
+              <option value="">Newest first</option>
+              <option value="amount">Largest amount first</option>
+            </select>
             <Button onClick={runAi} disabled={aiBusy} title={aiReady
               ? 'Sends cleaned merchant descriptions, amounts, account type and bank category to your AI provider. Never account numbers, balances, dates or names.'
               : 'Optional: add your own AI API key in Settings to use this'}>
@@ -124,9 +130,11 @@ export function Transactions() {
           </div>
         </div>
 
-        {(params.month || cat || person || acct || params.q) && (
+        {(params.month || params.from || cat || person || acct || params.q || params.hidden) && (
           <div className="flex flex-wrap gap-2 mt-3">
             {params.month && <Chip onClear={() => set({ month: '' })}>{monthLabel(params.month)}</Chip>}
+            {params.from && !params.month && <Chip onClear={() => set({ from: '', to: '' })}>{params.from} – {params.to}</Chip>}
+            {params.hidden && <Chip onClear={() => set({ hidden: '' })}>Hidden from charts</Chip>}
             {cat && <Chip color={cat.color} onClear={() => set({ cat: '' })}>{cat.name}</Chip>}
             {person && <Chip color={person.color} onClear={() => set({ person: '' })}>{person.name}</Chip>}
             {acct && <Chip onClear={() => set({ acct: '' })}>{acct.label}</Chip>}
@@ -149,6 +157,12 @@ export function Transactions() {
             <option value="">Choose category…</option>
             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
+          {kind === 'spending' && (
+            <>
+              <Button onClick={() => setHidden([...selected], true)}><EyeOff className="w-3.5 h-3.5" /> Hide from charts</Button>
+              <Button onClick={() => setHidden([...selected], false)}><Eye className="w-3.5 h-3.5" /> Show in charts</Button>
+            </>
+          )}
           {people.length === 0 && <span className="text-warn">Add people on the Accounts screen first.</span>}
           <Button variant="ghost" onClick={() => setSelected(new Set())}><X className="w-3.5 h-3.5" /> Clear</Button>
         </div>
@@ -169,11 +183,12 @@ export function Transactions() {
                 <th className="px-3 py-3">Person</th>
                 <th className="px-3 py-3">Category</th>
                 <th className="px-3 py-3 text-right">Amount</th>
+                {kind === 'spending' && <th className="px-3 py-3 text-center" title="Untick to leave a transaction out of every chart and total">In charts</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
               {rows.map(t => (
-                <tr key={t.id} className={`hover:bg-fill/60 ${selected.has(t.id) ? 'bg-accent/5' : ''}`}>
+                <tr key={t.id} className={`hover:bg-fill/60 ${selected.has(t.id) ? 'bg-accent/5' : ''} ${t.hidden ? 'text-muted' : ''}`}>
                   <td className="pl-4 pr-1 py-2.5">
                     <input type="checkbox" aria-label={`Select ${t.merchant}`} checked={selected.has(t.id)} onChange={() => {
                       const next = new Set(selected);
@@ -193,7 +208,7 @@ export function Transactions() {
                             : t.counterparty ? `${VIA_LABEL.account}: ${t.counterparty}` : VIA_LABEL[t.transferVia ?? 'manual']}
                         </div>
                       )}
-                      {t.isOneTime && <span className="text-[10px] uppercase tracking-wide text-warn">One-time</span>}
+                      {t.hidden && <span className="text-[10px] uppercase tracking-wide text-muted">Hidden from charts</span>}
                     </button>
                   </td>
                   <td className="px-3 py-2.5 whitespace-nowrap text-muted">{t.account}</td>
@@ -213,9 +228,15 @@ export function Transactions() {
                     {t.categorySource === 'manual' && <span className="ml-1 text-[10px] text-muted">edited</span>}
                     {t.categorySource === 'ai' && <span className="ml-1 text-[10px] text-[#5856D6]">AI</span>}
                   </td>
-                  <td className={`px-3 py-2.5 whitespace-nowrap text-right font-mono font-medium ${t.amountCents < 0 || (kind !== 'spending' && t.direction === 'in') ? 'text-good' : 'text-ink'}`}>
+                  <td className={`px-3 py-2.5 whitespace-nowrap text-right font-mono font-medium ${t.hidden ? 'text-muted line-through' : t.amountCents < 0 || (kind !== 'spending' && t.direction === 'in') ? 'text-good' : 'text-ink'}`}>
                     {t.kind === 'refund' ? `−${formatCents(Math.abs(t.amountCents))}` : formatCents(t.amountCents)}
                   </td>
+                  {kind === 'spending' && (
+                    <td className="px-3 py-2.5 text-center">
+                      <input type="checkbox" checked={!t.hidden} onChange={e => setHidden([t.id], !e.target.checked)}
+                        aria-label={`Show ${t.merchant} in charts`} title={t.hidden ? 'Hidden from charts: tick to include it again' : 'Untick to leave this out of charts and totals'} />
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -224,8 +245,15 @@ export function Transactions() {
         </div>
         {data && (
           <div className="border-t border-line px-4 py-3 flex justify-between text-xs text-muted">
-            <span>{data.count} transactions{data.truncated ? ` (showing the latest ${rows.length})` : ''}</span>
-            <span>Total <span className="text-ink font-semibold font-mono">{formatCents(data.sumCents)}</span></span>
+            <span>
+              {data.count} transactions{data.truncated ? ` (showing the first ${rows.length})` : ''}
+              {data.hiddenCount > 0 && !params.hidden && (
+                <> · <button className="text-accent hover:underline cursor-pointer" onClick={() => set({ hidden: '1' })}>
+                  {data.hiddenCount} hidden from charts ({formatCents(data.hiddenCents)})
+                </button></>
+              )}
+            </span>
+            <span>Total in charts <span className="text-ink font-semibold font-mono">{formatCents(data.sumCents)}</span></span>
           </div>
         )}
       </Card>
@@ -242,7 +270,7 @@ function EditTxnDialog({ txn, onClose }: { txn: Txn; onClose: () => void }) {
   const [personId, setPersonId] = useState<number | null>(txn.personId);
   const [rememberPerson, setRememberPerson] = useState(false);
   const [kind, setKind] = useState(txn.kind);
-  const [oneTime, setOneTime] = useState(txn.isOneTime);
+  const [inCharts, setInCharts] = useState(!txn.hidden);
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
@@ -250,7 +278,7 @@ function EditTxnDialog({ txn, onClose }: { txn: Txn; onClose: () => void }) {
     if (categoryId !== txn.categoryId || remember) Object.assign(body, { categoryId, remember });
     if (personId !== txn.personId || rememberPerson) Object.assign(body, { personId, rememberPerson });
     if (kind !== txn.kind) body.kind = kind;
-    if (oneTime !== txn.isOneTime) body.isOneTime = oneTime;
+    if (inCharts === txn.hidden) body.hidden = !inCharts;
     if (Object.keys(body).length === 0) return onClose();
     setBusy(true);
     try {
@@ -315,10 +343,10 @@ function EditTxnDialog({ txn, onClose }: { txn: Txn; onClose: () => void }) {
           </select>
         </label>
 
-        {(kind === 'spend' || kind === 'fee') && (
+        {(kind === 'spend' || kind === 'fee' || kind === 'refund') && (
           <label className="flex items-center gap-2 text-ink-2">
-            <input type="checkbox" checked={oneTime} onChange={e => setOneTime(e.target.checked)} />
-            One-time item (keep it out of normal monthly trends)
+            <input type="checkbox" checked={inCharts} onChange={e => setInCharts(e.target.checked)} />
+            Show in charts and totals (untick for a big one-off, like a house deposit)
           </label>
         )}
 

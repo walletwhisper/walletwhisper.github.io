@@ -55,7 +55,7 @@ describe('API', () => {
     expect(res.body.results.map((r: any) => r.rowsAdded)).toEqual([6, 10]);
     expect(res.body.matched.pairsLinked).toBe(1);
 
-    const s = (await request(app).get('/api/summary?includeOneTime=true')).body;
+    const s = (await request(app).get('/api/summary')).body;
     const sum = (xs: any[]) => xs.reduce((a, x) => a + x.cents, 0);
     expect(sum(s.byCategory)).toBe(s.totalSpend);
     expect(sum(s.byPerson)).toBe(s.totalSpend);

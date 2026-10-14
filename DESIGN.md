@@ -3,6 +3,9 @@
 > **Status:** Phases 0–3 implemented (branch `v4-rework`) · Phase 4 (more banks) waits for real header rows · Phase 5 partly done (AI limited to spending categories) · **Runs:** localhost only
 
 ### Implementation notes (where the code differs from the plan below)
+- **One-time items (§5.3) → "Show in charts".** Replaced by a per-transaction switch: sort Transactions by amount and untick anything to leave it out of every chart and total (stored in `is_one_time`). No threshold, no review question, no include toggle. Hidden totals are still shown so nothing silently disappears.
+- **Ask (new).** Overview and Trends have a question box. With the user's own AI key (Claude, Gemini or OpenAI, recognised from the key), only the question, today's date and category names are sent; the AI returns a period, categories, merchant and person (`src/llm.ts` `planQuestion`), and `src/ask.ts` computes the totals, previous-period and year-ago comparisons, 13-month trend and top merchants locally.
+- **Data folder and settings.** Chosen on first run (suggested `Documents/WalletWhisper`), movable in Settings. Data folder and AI key live in `~/.walletwhisper/config.json`, outside the project. An existing `data/` folder is adopted automatically.
 - **Soft delete → backups.** Undo import, reset and every migration take a full database snapshot in `data/backups/` first (plus one daily backup, 14 kept), instead of soft-delete columns. Simpler, and nothing to filter out of every query.
 - **Balance check (§5.5) deferred.** Coverage (§5.4) already catches the realistic failure, missing statements; gaps inside a single export are rare. "Incomplete month" is based on coverage only.
 - **Category names:** "Fees" kept (not "Taxes & Fees"). Added Kids, Insurance, Gifts & Donations, Credit card (untracked). Transfer and Income are assigned from `kind`, never by keyword.

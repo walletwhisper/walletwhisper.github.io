@@ -58,51 +58,77 @@ function DataFolder({ current }: { current: string | null }) {
   );
 }
 
+const KEY_EXAMPLES = [
+  { name: 'Claude (Anthropic)', site: 'console.anthropic.com', url: 'https://console.anthropic.com/settings/keys', steps: 'Sign in → API keys → Create key', looks: 'sk-ant-…' },
+  { name: 'ChatGPT (OpenAI)', site: 'platform.openai.com', url: 'https://platform.openai.com/api-keys', steps: 'Sign in → API keys → Create new secret key', looks: 'sk-…' },
+  { name: 'Gemini (Google)', site: 'aistudio.google.com', url: 'https://aistudio.google.com/apikey', steps: 'Sign in → Get API key → Create API key', looks: 'AIza…' },
+];
+
 function AiKey({ settings }: { settings: SettingsData }) {
   const { toast, refresh } = useStore();
+  const [editing, setEditing] = useState(false);
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
+  const showForm = editing || !settings.aiConfigured;
 
   const save = async (value: string) => {
     setBusy(true);
     try {
-      const r = await api.put<{ aiProvider: string | null }>('/api/settings/ai', { key: value });
-      toast(value ? `AI turned on with your ${r.aiProvider} key.` : 'AI key removed.');
+      await api.put('/api/settings/ai', { key: value });
+      toast(value ? 'AI is on. Try asking a question on the Overview screen.' : 'AI key removed. AI features are off.');
       setKey('');
+      setEditing(false);
       refresh();
     } catch (e: any) { toast(e.message); }
     finally { setBusy(false); }
   };
 
   return (
-    <Card title={<span className="flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> AI categories (optional)</span>}
-      subtitle="WalletWhisper works fully without AI. With a key, it can suggest categories for merchants it doesn't recognize.">
-      {settings.aiConfigured ? (
+    <Card title={<span className="flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> AI assistant (optional)</span>}
+      subtitle="WalletWhisper works fully without AI. With your own AI key you can ask questions about your spending and get category suggestions.">
+      {!showForm ? (
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-ink">
-            <span className="text-good font-semibold">On</span>, using your {settings.aiProvider} key.
-            {settings.aiKeyInEnvFile && <span className="text-muted"> (from the .env file)</span>}
+          <p className="text-sm text-ink flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-good" /> <span><b className="text-good">AI is on.</b> Your key is saved on this computer.</span>
           </p>
-          {!settings.aiKeyInEnvFile && <Button variant="danger" onClick={() => save('')} disabled={busy}>Remove key</Button>}
+          <div className="flex gap-2">
+            <Button onClick={() => setEditing(true)}>Change key</Button>
+            {!settings.aiKeyInEnvFile && <Button variant="danger" onClick={() => save('')} disabled={busy}>Turn off</Button>}
+          </div>
         </div>
       ) : (
-        <div className="space-y-3">
-          <ol className="text-sm text-ink-2 list-decimal pl-5 space-y-1">
-            <li>Create an API key with your AI provider. Claude, Gemini and OpenAI keys work.</li>
-            <li>Paste it below and press <b>Save</b>.</li>
-            <li>On the Transactions screen, press <b>AI categorize</b> whenever you want suggestions.</li>
-          </ol>
-          <div className="flex gap-2">
-            <input type="password" value={key} onChange={e => setKey(e.target.value)} placeholder="Paste your API key"
-              autoComplete="off" spellCheck={false} className={`${inputClass} flex-1 !text-sm !py-2`} />
-            <Button variant="primary" onClick={() => save(key)} disabled={busy || !key.trim()}>Save</Button>
+        <div className="space-y-4">
+          <div>
+            <p className="text-sm font-semibold text-ink">1. Get an API key from an AI provider</p>
+            <p className="text-xs text-muted mt-0.5">Any one of these works. Providers charge a small amount per use; asking a question costs a fraction of a cent.</p>
+            <ul className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
+              {KEY_EXAMPLES.map(x => (
+                <li key={x.name} className="rounded-[10px] bg-page p-3 text-xs">
+                  <span className="block font-semibold text-ink">{x.name}</span>
+                  <a className="text-accent hover:underline" href={x.url} target="_blank" rel="noopener noreferrer">{x.site}</a>
+                  <span className="block text-muted mt-1">{x.steps}</span>
+                  <span className="block text-muted mt-1">Looks like <code className="text-ink-2">{x.looks}</code></span>
+                </li>
+              ))}
+            </ul>
           </div>
+          <div>
+            <p className="text-sm font-semibold text-ink">2. Paste it here</p>
+            <div className="flex gap-2 mt-2">
+              <input type="password" value={key} onChange={e => setKey(e.target.value)} placeholder="Paste your API key"
+                autoComplete="off" spellCheck={false} className={`${inputClass} flex-1 !text-sm !py-2`} />
+              <Button variant="primary" onClick={() => save(key)} disabled={busy || !key.trim()}>Save</Button>
+              {editing && <Button variant="ghost" onClick={() => { setEditing(false); setKey(''); }}>Cancel</Button>}
+            </div>
+          </div>
+          <p className="text-sm text-ink-2">
+            <b>3. Use it:</b> ask questions in the box on the Overview and Trends screens, or press <b>AI categorize</b> on Transactions.
+          </p>
         </div>
       )}
       <p className="text-xs text-muted mt-4">
-        Nothing is sent until you press <b>AI categorize</b>. Then only cleaned merchant descriptions, amounts, account type
-        and the bank's category go to your AI provider: never account numbers, balances, dates or names.
-        Your key is saved on this computer only.
+        Nothing is sent until you ask a question or press <b>AI categorize</b>. A question sends only your words and the category names.
+        Categorizing sends cleaned merchant descriptions and amounts. Account numbers, balances, dates and names are never sent.
       </p>
     </Card>
   );

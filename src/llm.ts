@@ -102,7 +102,7 @@ function sanitizeDescription(raw: string): string {
     .trim();
 }
 
-/** JSON shape Claude and OpenAI must return: { results: [{ id, category }] } */
+/** JSON Schema for the categorization answer (Claude, OpenAI): { results: [{ id, category }] } */
 function resultSchema(categoryNames: string[]) {
   return {
     type: 'object',
@@ -122,40 +122,57 @@ function resultSchema(categoryNames: string[]) {
   };
 }
 
-function parseResults(text: string | undefined, who: string): Suggestion[] {
-  if (!text) throw new Error(`${who} returned an empty response.`);
-  const parsed = JSON.parse(text);
-  return Array.isArray(parsed) ? parsed : parsed.results ?? [];
+/**
+ * Send one prompt and get JSON back.
+ * `schema` is a JSON Schema (used by Claude and OpenAI for guaranteed structure);
+ * `geminiSchema` is Gemini's own schema format. Without it Gemini is just asked for JSON.
+ */
+async function requestJson(cfg: LlmConfig, prompt: string, schema: object, geminiSchema?: object): Promise<any> {
+  if (cfg.provider === 'claude') return callClaude(cfg, prompt, schema);
+  if (cfg.provider === 'openai') return callOpenAI(cfg, prompt, schema);
+  return callGemini(cfg, prompt, geminiSchema);
 }
 
-async function callClaude(cfg: LlmConfig, prompt: string, categoryNames: string[]): Promise<Suggestion[]> {
-  const client = new Anthropic({ apiKey: cfg.apiKey });
+/** Give up on a provider that doesn't answer, so the app never hangs waiting. */
+const REQUEST_TIMEOUT_MS = 30_000;
+const BUSY = (who: string) => new UserError(`${who} is busy or not responding right now. Please try again in a minute.`);
+const isTimeout = (err: unknown) => err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+
+function parseJson(text: string | undefined, who: string): any {
+  if (!text) throw new Error(`${who} returned an empty response.`);
+  return JSON.parse(text);
+}
+
+async function callClaude(cfg: LlmConfig, prompt: string, schema: object): Promise<any> {
+  const client = new Anthropic({ apiKey: cfg.apiKey, timeout: REQUEST_TIMEOUT_MS * 2, maxRetries: 1 });
   try {
     const response = await client.beta.messages.create({
       model: cfg.model,
       max_tokens: 16000,
-      // Simple classification: low effort keeps it fast and cheap
-      output_config: { effort: 'low', format: { type: 'json_schema', schema: resultSchema(categoryNames) } },
+      // Simple classification/parsing: low effort keeps it fast and cheap
+      output_config: { effort: 'low', format: { type: 'json_schema', schema: schema as Record<string, unknown> } },
       // If the model declines a request, the API retries it on a suitable fallback model
       betas: ['server-side-fallback-2026-07-01'],
       fallbacks: 'default',
       messages: [{ role: 'user', content: prompt }],
     });
-    if (response.stop_reason === 'refusal') throw new Error('Claude declined to categorize these transactions.');
+    if (response.stop_reason === 'refusal') throw new Error('Claude declined this request.');
     if (response.stop_reason === 'max_tokens') throw new Error('Claude response was cut off; try again.');
     const text = response.content.find(b => b.type === 'text');
-    return parseResults(text?.type === 'text' ? text.text : undefined, 'Claude');
+    return parseJson(text?.type === 'text' ? text.text : undefined, 'Claude');
   } catch (err) {
     if (err instanceof Anthropic.AuthenticationError) throw new UserError('Claude rejected the API key. Check it in Settings.');
     if (err instanceof Anthropic.RateLimitError) throw new UserError('Claude rate limit reached. Try again in a minute.');
+    if (err instanceof Anthropic.APIConnectionTimeoutError || err instanceof Anthropic.InternalServerError) throw BUSY('Claude');
     if (err instanceof Anthropic.APIError) throw new Error(`Claude API error ${err.status}: ${err.message}`);
     throw err;
   }
 }
 
-async function callGemini(cfg: LlmConfig, prompt: string, categoryNames: string[]): Promise<Suggestion[]> {
+async function callGemini(cfg: LlmConfig, prompt: string, geminiSchema?: object): Promise<any> {
   const candidateModels = [cfg.model, 'gemini-3.5-flash', 'gemini-3.1-flash-lite'].filter((v, i, a) => a.indexOf(v) === i);
   let lastError: Error | null = null;
+  let busy = 0;
 
   for (const modelName of candidateModels) {
     try {
@@ -165,66 +182,73 @@ async function callGemini(cfg: LlmConfig, prompt: string, categoryNames: string[
         generationConfig: {
           temperature: 0,
           responseMimeType: 'application/json',
-          responseSchema: {
-            type: 'ARRAY',
-            items: {
-              type: 'OBJECT',
-              properties: {
-                id: { type: 'INTEGER' },
-                category: { type: 'STRING', enum: categoryNames }
-              },
-              required: ['id', 'category']
-            }
-          }
+          ...(geminiSchema ? { responseSchema: geminiSchema } : {})
         }
       };
 
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.apiKey },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS / 2)
       });
 
-      if (!res.ok) {
+      if (res.status === 400 || res.status === 403) {
         const text = await res.text();
+        if (/API key/i.test(text)) throw new UserError('Gemini rejected the API key. Check it in Settings.');
         throw new Error(`Gemini API error ${res.status} (${modelName}): ${text.slice(0, 300)}`);
       }
+      if (res.status === 429 || res.status === 503) { busy++; throw new Error(`Gemini ${modelName} is overloaded (${res.status})`); }
+      if (!res.ok) throw new Error(`Gemini API error ${res.status} (${modelName}): ${(await res.text()).slice(0, 300)}`);
 
       const data: any = await res.json();
-      return parseResults(data?.candidates?.[0]?.content?.parts?.[0]?.text, 'Gemini');
+      return parseJson(data?.candidates?.[0]?.content?.parts?.[0]?.text, 'Gemini');
     } catch (err: any) {
+      if (err instanceof UserError) throw err;
+      if (isTimeout(err)) busy++;
       lastError = err;
       console.warn(`Gemini attempt with ${modelName} failed:`, err.message);
     }
   }
 
+  if (busy === candidateModels.length) throw BUSY('Gemini');
   throw lastError || new Error('All Gemini candidate models failed.');
 }
 
-async function callOpenAI(cfg: LlmConfig, prompt: string, categoryNames: string[]): Promise<Suggestion[]> {
+async function callOpenAI(cfg: LlmConfig, prompt: string, schema: object): Promise<any> {
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
     body: JSON.stringify({
       model: cfg.model,
       messages: [{ role: 'user', content: prompt }],
-      response_format: {
-        type: 'json_schema',
-        json_schema: { name: 'categories', strict: true, schema: resultSchema(categoryNames) },
-      },
+      response_format: { type: 'json_schema', json_schema: { name: 'result', strict: true, schema } },
     }),
-  });
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS * 2),
+  }).catch(err => { throw isTimeout(err) ? BUSY('OpenAI') : err; });
   if (res.status === 401) throw new UserError('OpenAI rejected the API key. Check it in Settings.');
+  if (res.status === 429 || res.status >= 500) throw BUSY('OpenAI');
   if (!res.ok) throw new Error(`OpenAI API error ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data: any = await res.json();
-  return parseResults(data?.choices?.[0]?.message?.content, 'OpenAI');
+  return parseJson(data?.choices?.[0]?.message?.content, 'OpenAI');
 }
 
-const CALLERS: Record<AiProvider, (cfg: LlmConfig, prompt: string, categoryNames: string[]) => Promise<Suggestion[]>> = {
-  claude: callClaude,
-  gemini: callGemini,
-  openai: callOpenAI,
-};
+/** Gemini's own schema for the categorization answer: [{ id, category }] */
+function geminiResultSchema(categoryNames: string[]) {
+  return {
+    type: 'ARRAY',
+    items: {
+      type: 'OBJECT',
+      properties: { id: { type: 'INTEGER' }, category: { type: 'STRING', enum: categoryNames } },
+      required: ['id', 'category']
+    }
+  };
+}
+
+async function suggestCategories(cfg: LlmConfig, prompt: string, categoryNames: string[]): Promise<Suggestion[]> {
+  const parsed = await requestJson(cfg, prompt, resultSchema(categoryNames), geminiResultSchema(categoryNames));
+  return Array.isArray(parsed) ? parsed : parsed?.results ?? [];
+}
 
 function buildPrompt(items: object[], categoryNames: string[]): string {
   return `You categorize personal credit card and bank purchases for a spending tracker.
@@ -288,7 +312,7 @@ export async function recategorizeWithLlm(db: Db): Promise<AiRecategorizeResult>
       amountUSD: Math.abs(g[0].cents) / 100,
       bankCategory: g[0].bankCategory
     }));
-    const results = await CALLERS[cfg.provider](cfg, buildPrompt(items, categoryNames), categoryNames);
+    const results = await suggestCategories(cfg, buildPrompt(items, categoryNames), categoryNames);
     for (const r of results) {
       if (categoryNames.includes(r.category)) suggestions.set(r.id, r.category);
     }
@@ -320,4 +344,70 @@ export async function recategorizeWithLlm(db: Db): Promise<AiRecategorizeResult>
     skippedSuggestions: skipped,
     changes: changes.sort((a, b) => b.date.localeCompare(a.date))
   };
+}
+
+// ---------- Ask: turn a question into a spending query ----------
+
+export interface QuestionPlan {
+  understood: boolean;
+  clarification: string | null;
+  from: string;
+  to: string;
+  periodLabel: string;
+  categories: string[];
+  person: string | null;
+  merchant: string | null;
+}
+
+function planSchema(categoryNames: string[]) {
+  return {
+    type: 'object',
+    properties: {
+      understood: { type: 'boolean' },
+      clarification: { type: ['string', 'null'] },
+      from: { type: 'string' },
+      to: { type: 'string' },
+      periodLabel: { type: 'string' },
+      categories: { type: 'array', items: { type: 'string', enum: categoryNames } },
+      person: { type: ['string', 'null'] },
+      merchant: { type: ['string', 'null'] },
+    },
+    required: ['understood', 'clarification', 'from', 'to', 'periodLabel', 'categories', 'person', 'merchant'],
+    additionalProperties: false,
+  };
+}
+
+/**
+ * Only the user's own question, today's date and the category names are sent. The AI returns
+ * which period/categories/merchant the question is about; every number is computed locally.
+ */
+export async function planQuestion(question: string, categoryNames: string[], today: string): Promise<QuestionPlan> {
+  const cfg = getConfig();
+  const prompt = `You turn a household's question about their own spending into a structured query. You never see their data.
+
+Today is ${today}.
+Spending categories: ${categoryNames.join(', ')}
+
+Answer with one JSON object with exactly these fields:
+- from, to: the period the question is about, as inclusive YYYY-MM-DD dates.
+  "last month" = the previous calendar month; "this month" = the 1st of this month to today;
+  "this year" = January 1 to today; "last year" = the previous calendar year;
+  a month name = the most recent such month that isn't in the future.
+  If no period is mentioned, use the previous calendar month.
+- periodLabel: a short human label for the period, e.g. "September 2026", "2025", "Jan 1 – Oct 14, 2026".
+- categories: the categories the question is about, chosen only from the list (e.g. "eating out" -> Dining).
+  Use an empty list when it asks about spending in general or about a merchant.
+- merchant: a store or company named in the question (e.g. "Amazon", "Costco"), otherwise null.
+- person: a person's name if it asks what a specific person spent, otherwise null.
+- understood: false only if the question isn't about spending at all; then put a short, friendly
+  suggestion of what they could ask in clarification. Otherwise clarification is null.
+
+Question: ${JSON.stringify(question)}`;
+  const plan = await requestJson(cfg, prompt, planSchema(categoryNames)) as QuestionPlan;
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  if (plan.understood && (!iso.test(plan.from) || !iso.test(plan.to) || plan.from > plan.to)) {
+    throw new UserError("Sorry, I couldn't work out the dates in that question. Try naming a month or year.");
+  }
+  plan.categories = (plan.categories ?? []).filter(c => categoryNames.includes(c));
+  return plan;
 }

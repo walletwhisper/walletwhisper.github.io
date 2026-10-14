@@ -44,7 +44,7 @@ export function About() {
             <Feature color="#4398D3" icon={<Layers />} title="Every dollar once" desc="Card payments and transfers between your accounts are matched, so nothing is double counted" />
             <Feature color="#EE8D3D" icon={<BarChart3 />} title="See it visually" desc="Monthly overview, category donut, and trends that flag incomplete months" />
             <Feature color="#5856D6" icon={<Users />} title="Who spent what" desc="Mark each transaction with a person; set a default person per account" />
-            <Feature color="#34C759" icon={<Sparkles />} title="Optional AI categories" desc="Off unless you add your own AI key in Settings, and used only when you press the button" />
+            <Feature color="#34C759" icon={<Sparkles />} title="Ask in plain English" desc="Optional: with your own AI key, ask things like &quot;dining last month?&quot; and see how it compares" />
             <Feature color="#C5362F" icon={<Lock />} title="100% private" desc="No accounts, no cloud, no tracking. Your data stays in a folder on this computer" />
           </div>
         </div>
@@ -92,8 +92,8 @@ function PrivacyPanel() {
               Bank files are read on this computer. Downloading WalletWhisper from GitHub gives you only the program, never anyone's data.
             </Fact>
             <Fact icon={<Sparkles />} title="AI is optional">
-              It's off unless you add your own AI key. Even then, nothing is sent until you press <b>AI categorize</b>,
-              and never account numbers, balances, dates or names.
+              It's off unless you add your own AI key. Asking a question sends only your words; the answer is worked out
+              on this computer. Account numbers, balances, dates and names are never sent.
             </Fact>
           </ul>
         </div>

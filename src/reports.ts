@@ -12,7 +12,10 @@ export interface Filters {
   personId?: number | 'none';
   accountId?: number;
   q?: string;
-  includeOneTime?: boolean;
+  /** Transactions list: newest first (default) or largest amount first */
+  sort?: 'date' | 'amount';
+  /** Transactions list: only the ones left out of the charts */
+  hiddenOnly?: boolean;
 }
 
 /** Parse query-string filters, ignoring anything malformed. */
@@ -29,7 +32,8 @@ export function parseFilters(q: Record<string, unknown>): Filters {
     personId: person === 'none' ? 'none' : int('personId'),
     accountId: int('accountId'),
     q: str('q')?.slice(0, 100),
-    includeOneTime: str('includeOneTime') === 'true'
+    sort: str('sort') === 'amount' ? 'amount' : undefined,
+    hiddenOnly: str('hidden') === '1'
   };
 }
 
@@ -53,7 +57,11 @@ function buildWhere(f: Filters, skip: (keyof Filters)[] = []): Where {
   return { sql: parts.join(' AND '), params };
 }
 
-const notOneTime = 'COALESCE(t.is_one_time, 0) = 0';
+// Transactions the user unticked ("Show in charts") are left out of every chart and total.
+// Stored in the is_one_time column, which predates the per-transaction switch.
+const inCharts = 'COALESCE(t.is_one_time, 0) = 0';
+const hiddenFromCharts = 't.is_one_time = 1';
+export const IN_CHARTS = inCharts;
 
 function median(values: number[]): number {
   if (values.length === 0) return 0;
@@ -64,13 +72,12 @@ function median(values: number[]): number {
 
 export function getSummary(db: Db, f: Filters) {
   const w = buildWhere(f);
-  const oneTimeClause = f.includeOneTime ? '' : ` AND ${notOneTime}`;
-  const spendWhere = `${w.sql} AND ${SPENDING}${oneTimeClause}`;
+  const spendWhere = `${w.sql} AND ${SPENDING} AND ${inCharts}`;
 
   const totals = db.prepare(`SELECT COALESCE(SUM(t.amount_cents), 0) AS total, COUNT(*) AS n FROM transactions t WHERE ${spendWhere}`)
     .get(...w.params) as { total: number; n: number };
-  const oneTime = db.prepare(`SELECT COALESCE(SUM(t.amount_cents), 0) AS total, COUNT(*) AS n FROM transactions t
-    WHERE ${w.sql} AND ${SPENDING} AND t.is_one_time = 1`).get(...w.params) as { total: number; n: number };
+  const hidden = db.prepare(`SELECT COALESCE(SUM(t.amount_cents), 0) AS total, COUNT(*) AS n FROM transactions t
+    WHERE ${w.sql} AND ${SPENDING} AND ${hiddenFromCharts}`).get(...w.params) as { total: number; n: number };
   const wIncome = buildWhere(f, ['categoryId']);
   const moneyIn = (db.prepare(`SELECT COALESCE(SUM(t.amount_cents), 0) AS total FROM transactions t WHERE ${wIncome.sql} AND t.kind = 'income'`)
     .get(...wIncome.params) as { total: number }).total;
@@ -101,10 +108,10 @@ export function getSummary(db: Db, f: Filters) {
   const completeness = monthCompleteness(db);
   const byMonth = (db.prepare(`
     SELECT substr(t.txn_date, 1, 7) AS month,
-           SUM(CASE WHEN ${notOneTime} THEN t.amount_cents ELSE 0 END) AS cents,
-           SUM(CASE WHEN t.is_one_time = 1 THEN t.amount_cents ELSE 0 END) AS oneTimeCents
+           SUM(CASE WHEN ${inCharts} THEN t.amount_cents ELSE 0 END) AS cents,
+           SUM(CASE WHEN ${hiddenFromCharts} THEN t.amount_cents ELSE 0 END) AS hiddenCents
     FROM transactions t WHERE ${wMonths.sql} AND ${SPENDING}
-    GROUP BY month ORDER BY month`).all(...wMonths.params) as { month: string; cents: number; oneTimeCents: number }[])
+    GROUP BY month ORDER BY month`).all(...wMonths.params) as { month: string; cents: number; hiddenCents: number }[])
     .map(m => ({ ...m, complete: completeness.get(m.month) ?? true }));
 
   // Typical month: median of the last 6 complete months before the period being viewed
@@ -117,8 +124,8 @@ export function getSummary(db: Db, f: Filters) {
   return {
     totalSpend: totals.total,
     totalTxnCount: totals.n,
-    oneTimeCents: oneTime.total,
-    oneTimeCount: oneTime.n,
+    hiddenCents: hidden.total,
+    hiddenCount: hidden.n,
     moneyIn,
     byCategory,
     byPerson,
@@ -135,16 +142,15 @@ export type StackBy = 'category' | 'person' | 'account';
 
 export function getTrends(db: Db, f: Filters, months: number, stack: StackBy) {
   const w = buildWhere(f, ['from', 'to', 'month']);
-  const oneTimeClause = f.includeOneTime ? '' : ` AND ${notOneTime}`;
   const keyExpr = stack === 'category' ? 't.category_id' : stack === 'person' ? 'COALESCE(t.person_id, 0)' : 't.account_id';
 
   const rows = db.prepare(`
     SELECT substr(t.txn_date, 1, 7) AS month, ${keyExpr} AS key, SUM(t.amount_cents) AS cents
-    FROM transactions t WHERE ${w.sql} AND ${SPENDING}${oneTimeClause}
+    FROM transactions t WHERE ${w.sql} AND ${SPENDING} AND ${inCharts}
     GROUP BY month, key`).all(...w.params) as { month: string; key: number; cents: number }[];
-  const oneTimeRows = db.prepare(`
+  const hiddenRows = db.prepare(`
     SELECT substr(t.txn_date, 1, 7) AS month, SUM(t.amount_cents) AS cents
-    FROM transactions t WHERE ${w.sql} AND ${SPENDING} AND t.is_one_time = 1 GROUP BY month`).all(...w.params) as { month: string; cents: number }[];
+    FROM transactions t WHERE ${w.sql} AND ${SPENDING} AND ${hiddenFromCharts} GROUP BY month`).all(...w.params) as { month: string; cents: number }[];
 
   const allMonths = [...new Set(rows.map(r => r.month))].sort();
   const last = f.to?.slice(0, 7) || allMonths[allMonths.length - 1];
@@ -199,7 +205,7 @@ export function getTrends(db: Db, f: Filters, months: number, stack: StackBy) {
       month,
       complete: completeness.get(month) ?? true,
       totalCents: total,
-      oneTimeCents: oneTimeRows.find(o => o.month === month)?.cents || 0,
+      hiddenCents: hiddenRows.find(o => o.month === month)?.cents || 0,
       segments
     };
   });
@@ -303,12 +309,16 @@ export function getTransactions(db: Db, f: Filters, kind: string, limit = 2000) 
     kind === 'all' ? '' :
     kind === 'transfer' ? " AND t.kind = 'transfer'" :
     kind === 'income' ? " AND t.kind = 'income'" :
-    // Same rule as the charts, so the table footer always equals the clicked slice
-    ` AND ${SPENDING}${f.includeOneTime ? '' : ` AND ${notOneTime}`}`;
-  const where = `${w.sql}${kindClause}`;
+    ` AND ${SPENDING}`;
+  const where = `${w.sql}${kindClause}${f.hiddenOnly ? ` AND ${hiddenFromCharts}` : ''}`;
 
-  const agg = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(t.amount_cents), 0) AS sum FROM transactions t WHERE ${where}`)
-    .get(...w.params) as { n: number; sum: number };
+  // The footer total counts only rows shown in charts, so it matches the chart slice that was clicked
+  const agg = db.prepare(`
+    SELECT COUNT(*) AS n,
+           COALESCE(SUM(CASE WHEN ${inCharts} THEN t.amount_cents END), 0) AS sum,
+           COALESCE(SUM(CASE WHEN ${hiddenFromCharts} THEN t.amount_cents END), 0) AS hiddenSum,
+           COUNT(CASE WHEN ${hiddenFromCharts} THEN 1 END) AS hiddenCount
+    FROM transactions t WHERE ${where}`).get(...w.params) as { n: number; sum: number; hiddenSum: number; hiddenCount: number };
 
   const rows = db.prepare(`
     SELECT t.id, t.txn_date AS date, t.raw_description AS rawDescription, t.merchant, t.amount_cents AS amountCents,
@@ -316,7 +326,7 @@ export function getTransactions(db: Db, f: Filters, kind: string, limit = 2000) 
            t.category_id AS categoryId, t.category_source AS categorySource, t.bank_category AS bankCategory,
            c.name AS categoryName, c.color AS categoryColor,
            t.person_id AS personId, t.person_source AS personSource, p.name AS personName, p.color AS personColor,
-           t.is_one_time AS isOneTime,
+           t.is_one_time AS hidden,
            a.id AS accountId, a.nickname, a.bank, a.account_type, a.last4,
            cp.nickname AS cpNickname, cp.bank AS cpBank, cp.account_type AS cpType, cp.last4 AS cpLast4,
            l.id AS linkId, l.method AS linkMethod,
@@ -329,7 +339,7 @@ export function getTransactions(db: Db, f: Filters, kind: string, limit = 2000) 
     LEFT JOIN transfer_links l ON l.out_txn_id = t.id OR l.in_txn_id = t.id
     LEFT JOIN transactions partner ON partner.id = CASE WHEN l.out_txn_id = t.id THEN l.in_txn_id ELSE l.out_txn_id END
     WHERE ${where}
-    ORDER BY t.txn_date DESC, t.id DESC
+    ORDER BY ${f.sort === 'amount' ? 'ABS(t.amount_cents) DESC,' : ''} t.txn_date DESC, t.id DESC
     LIMIT ?`).all(...w.params, limit) as any[];
 
   const transactions = rows.map(r => ({
@@ -338,12 +348,15 @@ export function getTransactions(db: Db, f: Filters, kind: string, limit = 2000) 
     categoryId: r.categoryId, categorySource: r.categorySource, bankCategory: r.bankCategory,
     categoryName: r.categoryName, categoryColor: r.categoryColor,
     personId: r.personId, personSource: r.personSource, personName: r.personName, personColor: r.personColor,
-    isOneTime: r.isOneTime === 1,
+    hidden: r.hidden === 1,
     accountId: r.accountId,
     account: accountLabel(r),
     counterparty: r.cpBank ? accountLabel({ nickname: r.cpNickname, bank: r.cpBank, account_type: r.cpType, last4: r.cpLast4 }) : null,
     linkId: r.linkId, linkMethod: r.linkMethod, partnerDate: r.partnerDate
   }));
 
-  return { transactions, count: agg.n, sumCents: agg.sum, truncated: agg.n > transactions.length };
+  return {
+    transactions, count: agg.n, sumCents: agg.sum, hiddenCents: agg.hiddenSum, hiddenCount: agg.hiddenCount,
+    truncated: agg.n > transactions.length
+  };
 }

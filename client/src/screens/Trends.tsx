@@ -4,6 +4,7 @@ import { qs } from '../api';
 import { useFetch, useStore } from '../store';
 import { formatCents, monthLabel, shortMoney, shortMonth, useRoute } from '../lib';
 import { Card, Chip, Dot, Empty, Segmented, inputClass, tooltipClass } from '../ui';
+import { AskBox } from '../AskBox';
 
 const STACKS = [
   { id: 'category', label: 'Category' },
@@ -16,15 +17,14 @@ export function Trends() {
   const { categories, people, accounts } = useStore();
   const stack = (params.stack as 'category' | 'person' | 'account') || 'category';
   const months = params.months || '12';
-  const includeOneTime = params.onetime === '1';
   const set = (patch: Record<string, string>) => navigate('trends', { ...params, ...patch });
 
   const { data } = useFetch<TrendsData>(`/api/trends${qs({
-    stack, months, includeOneTime, categoryId: params.cat, personId: params.person, accountId: params.acct,
+    stack, months, categoryId: params.cat, personId: params.person, accountId: params.acct,
   })}`);
 
   const rows = (data?.months ?? []).map(m => ({ ...m, ...Object.fromEntries(Object.entries(m.segments).map(([k, v]) => [`s${k}`, v])) }));
-  const oneTimeTotal = (data?.months ?? []).reduce((a, m) => a + m.oneTimeCents, 0);
+  const hiddenTotal = (data?.months ?? []).reduce((a, m) => a + m.hiddenCents, 0);
 
   const clickSegment = (seriesKey: string, month: string) => {
     const extra: Record<string, string> = { month };
@@ -34,7 +34,6 @@ export function Trends() {
       if (stack === 'account') extra.acct = seriesKey;
     }
     for (const k of ['cat', 'person', 'acct'] as const) if (params[k] && !extra[k]) extra[k] = params[k];
-    if (includeOneTime) extra.onetime = '1';
     navigate('transactions', extra);
   };
 
@@ -44,6 +43,7 @@ export function Trends() {
 
   return (
     <div className="space-y-6">
+      <AskBox />
       <Card
         title="Spending over time"
         subtitle="Click a bar segment to see those transactions · faded bars are months with missing statements"
@@ -56,10 +56,6 @@ export function Trends() {
               <option value="12">12 months</option>
               <option value="24">24 months</option>
             </select>
-            <label className="flex items-center gap-1.5 text-ink-2 cursor-pointer">
-              <input type="checkbox" checked={includeOneTime} onChange={e => set({ onetime: e.target.checked ? '1' : '' })} />
-              Include one-time items
-            </label>
           </div>
         }
       >
@@ -90,7 +86,7 @@ export function Trends() {
                           <span className="font-mono">{formatCents(Number(p.value))}</span>
                         </p>
                       ))}
-                      {!includeOneTime && m.oneTimeCents > 0 && <p className="text-muted mt-1">+ {formatCents(m.oneTimeCents)} one-time (hidden)</p>}
+                      {m.hiddenCents > 0 && <p className="text-muted mt-1">+ {formatCents(m.hiddenCents)} hidden from charts</p>}
                     </div>
                   );
                 }} />
@@ -113,9 +109,12 @@ export function Trends() {
             ))}
           </div>
         )}
-        {!includeOneTime && oneTimeTotal > 0 && (
+        {hiddenTotal > 0 && (
           <p className="mt-3 text-xs text-muted">
-            {formatCents(oneTimeTotal)} of one-time items are hidden so they don't swamp the normal pattern.
+            {formatCents(hiddenTotal)} of transactions you chose to hide aren't in this chart.{' '}
+            <button className="text-accent hover:underline cursor-pointer" onClick={() => navigate('transactions', { hidden: '1' })}>
+              See or change them
+            </button>
           </p>
         )}
       </Card>

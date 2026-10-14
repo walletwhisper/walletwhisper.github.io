@@ -6,6 +6,7 @@ import { qs } from '../api';
 import { useFetch } from '../store';
 import { formatCents, median, monthEnd, monthLabel, useRoute } from '../lib';
 import { Button, Card, Dot, Empty, Stat, tooltipClass } from '../ui';
+import { AskBox } from '../AskBox';
 
 export function Overview() {
   const { params, navigate } = useRoute();
@@ -49,6 +50,7 @@ export function Overview() {
 
   return (
     <div className="space-y-6">
+      <AskBox />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Button variant="ghost" disabled={idx <= 0} onClick={() => navigate('overview', { month: months[idx - 1] })} aria-label="Previous month">
@@ -78,12 +80,14 @@ export function Overview() {
         />
         <Stat label="Money in" value={formatCents(s.moneyIn)} tone="good" hint="Income, not transfers between your accounts" />
         <Stat
-          label={s.reviewCount ? 'Needs review' : 'One-time items'}
-          value={s.reviewCount ? s.reviewCount : formatCents(s.oneTimeCents)}
+          label={s.reviewCount ? 'Needs review' : 'Hidden from charts'}
+          value={s.reviewCount ? s.reviewCount : formatCents(s.hiddenCents)}
           tone={s.reviewCount ? 'warn' : undefined}
           hint={s.reviewCount
             ? <button className="underline cursor-pointer" onClick={() => navigate('review')}>Answer a few questions so totals are right</button>
-            : 'Large one-offs, shown separately'}
+            : <button className="underline cursor-pointer" onClick={() => navigate('transactions', { hidden: '1' })}>
+                {s.hiddenCount ? `${s.hiddenCount} transaction${s.hiddenCount === 1 ? '' : 's'} you left out` : 'Untick any transaction to leave it out'}
+              </button>}
         />
       </div>
 
