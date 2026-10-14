@@ -32,6 +32,7 @@ const FORBIDDEN_FILES = [
   [/(^|\/)data\//i, 'local app data folder'],
   [/(^|\/)backups?\//i, 'backup folder'],
   [/\.(db|db-wal|db-shm|db-journal|sqlite3?)$/i, 'database file'],
+  [/\.wwbackup$/i, 'WalletWhisper backup file (contains all your financial data)'],
   [/\.(pem|key|p12|pfx)$/i, 'private key / certificate'],
 ];
 const BANK_EXPORT = /\.(csv|ofx|qfx|qif|xlsx?|pdf)$/i;

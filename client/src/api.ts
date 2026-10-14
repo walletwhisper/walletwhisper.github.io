@@ -23,6 +23,34 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   return data as T;
 }
 
+/** Download the backup file (all data, optionally password-protected) and hand it to the browser to save. */
+export async function downloadBackup(password: string): Promise<void> {
+  const res = await fetch('/api/backup/export', {
+    method: 'POST',
+    headers: { 'X-App-Token': await token(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: password || undefined }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Export failed (${res.status})`);
+  const name = res.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] ?? 'walletwhisper-backup.wwbackup';
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+export interface BackupInfo { transactions: number; accounts: number; people: number; from: string | null; to: string | null }
+
+/** Send a backup file to the server: `inspect` only reads it, `restore` replaces the data. */
+export function sendBackup<T>(action: 'inspect' | 'restore', file: File, password: string, confirm = false): Promise<T> {
+  const form = new FormData();
+  form.append('file', file);
+  if (password) form.append('password', password);
+  if (confirm) form.append('confirm', 'REPLACE');
+  return request<T>('POST', `/api/backup/${action}`, form);
+}
+
 export const api = {
   get: <T>(url: string) => request<T>('GET', url),
   post: <T>(url: string, body?: unknown) => request<T>('POST', url, body),

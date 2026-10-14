@@ -45,6 +45,17 @@ npm start        # builds the interface and opens it in your browser
 
 Choose a folder for your data, then download CSV statements from your bank's website and drop them onto the page, or click **Import**.
 
+### Moving to another computer
+
+You don't need to import your statements again on a new computer.
+
+1. **On the old computer:** go to **Settings → Move to another computer** and choose **Download backup file**. The file holds all your transactions, people, accounts and choices. You can set a password to encrypt it (AES-256), which is a good idea if it goes through email or a cloud drive.
+2. **On the new computer:** install WalletWhisper. On the welcome screen, tick **Moving from another computer?** and choose the file. If WalletWhisper is already set up there, use **Settings → Restore from file** instead.
+
+After restoring, everything works as before, and you can keep importing and editing. Restoring replaces the data on that computer, but a copy of the previous data is saved in its backups folder first.
+
+Backup files (`.wwbackup`) are git-ignored and blocked by the privacy check. Your AI key and data folder aren't included, because they belong to each computer.
+
 ### Optional: the AI assistant
 
 WalletWhisper works fully without AI. With your own AI key you can also:

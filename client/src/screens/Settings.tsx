@@ -4,6 +4,7 @@ import { api } from '../api';
 import type { Settings as SettingsData } from '../api';
 import { useFetch, useStore } from '../store';
 import { Button, Card, inputClass } from '../ui';
+import { MoveData } from './MoveData';
 
 export function Settings() {
   const settings = useFetch<SettingsData>('/api/settings').data;
@@ -11,6 +12,7 @@ export function Settings() {
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       <DataFolder current={settings.dataFolder} />
+      {settings.dataFolder && <MoveData />}
       <AiKey settings={settings} />
     </div>
   );

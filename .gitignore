@@ -12,6 +12,7 @@ data/
 *.db-journal
 *.sqlite
 *.sqlite3
+*.wwbackup
 backups/
 
 # Bank exports and statements (any case). Only the synthetic test fixtures are allowed.

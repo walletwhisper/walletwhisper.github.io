@@ -2,7 +2,8 @@ import express, { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { audit, backupDb, currentDataFolder, Db, getDb, isSetUp, resetDbInstance } from './db.js';
+import { audit, backupDb, currentDataFolder, Db, dbPath, getDb, isSetUp, resetDbInstance } from './db.js';
+import { backupFileName, createBackup, isEncryptedBackup, prepareRestore, swapInDatabase } from './backup.js';
 import { suggestedDataFolder, updateConfig } from './config.js';
 import { AccountChoice, backfillLast4, finishImports, importCsvContent, previewCsv, accountLabel } from './importer.js';
 import { aiStatus, detectProvider, planQuestion, PROVIDER_NAMES, recategorizeWithLlm } from './llm.js';
@@ -68,7 +69,8 @@ export async function createServer() {
   app.use(requestGuard);
   app.use(express.json({ limit: '1mb' }));
   app.use('/api', (req, res, next) => {
-    if (ready || req.path === '/session' || req.path === '/setup') return next();
+    // Checking a backup file needs no database, so a new computer can do it before setup
+    if (ready || req.path === '/session' || req.path === '/setup' || req.path === '/backup/inspect') return next();
     res.status(409).json({ error: 'Choose where to store your data first', setupRequired: true });
   });
 
@@ -488,6 +490,50 @@ export async function createServer() {
     recompute(db);
     audit(db, 'ai_recategorize', { reviewed: result.reviewed, changed: result.changed });
     res.json(result);
+  }));
+
+  // ---------- Move to another computer: backup file export / restore ----------
+  const backupUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024, files: 1 } });
+  const backupFile = (req: Request) => {
+    const file = req.file;
+    if (!file) throw new BadRequest('Choose a backup file');
+    const password = typeof req.body?.password === 'string' && req.body.password ? req.body.password : undefined;
+    return { buffer: file.buffer, password };
+  };
+
+  app.post('/api/backup/export', h((req, res) => {
+    const password = typeof req.body?.password === 'string' && req.body.password ? req.body.password : undefined;
+    if (password && password.length < 8) throw new BadRequest('Use a password of at least 8 characters');
+    const file = createBackup(db, password);
+    audit(db, 'backup_exported', { encrypted: !!password, bytes: file.length });
+    res.set({
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${backupFileName()}"`,
+      'Cache-Control': 'no-store',
+    }).send(file);
+  }));
+
+  // Look inside a backup before restoring it, so the user can confirm what they're about to load
+  app.post('/api/backup/inspect', backupUpload.single('file'), h((req, res) => {
+    const { buffer, password } = backupFile(req);
+    if (isEncryptedBackup(buffer) && !password) return res.json({ needsPassword: true });
+    const { tmpPath, info } = prepareRestore(buffer, password);
+    fs.rmSync(tmpPath, { force: true });
+    res.json({ needsPassword: false, info });
+  }));
+
+  app.post('/api/backup/restore', backupUpload.single('file'), h((req, res) => {
+    const { buffer, password } = backupFile(req);
+    const hasData = (db.prepare('SELECT COUNT(*) AS n FROM transactions').get() as { n: number }).n > 0;
+    if (hasData && req.body?.confirm !== 'REPLACE') throw new BadRequest('Restoring replaces the data on this computer. Confirm to continue.');
+    if (!currentDataFolder()) throw new BadRequest('Restoring is not available in this mode');
+    const { tmpPath, info } = prepareRestore(buffer, password);
+    const saved = backupDb(db, 'before-restore');
+    resetDbInstance();
+    swapInDatabase(tmpPath, dbPath());
+    openData(); // runs any schema upgrades for backups from older versions
+    audit(db, 'backup_restored', { ...info, previousDataSavedTo: saved });
+    res.json({ success: true, info });
   }));
 
   // ---------- Reset ----------
