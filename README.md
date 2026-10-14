@@ -34,6 +34,13 @@ Optional AI categorization: copy `.env.example` to `.env` and add your API key.
 ### Your data stays on your computer
 Your database (`data/`), backups, bank CSV exports and `.env` (API keys) are all git-ignored and are never committed. The only CSVs in the repo are the made-up samples in `tests/fixtures/`.
 
+A privacy check runs automatically before every `git commit` and `git push` (hooks in `.githooks/`, switched on by `npm install`). It blocks:
+- databases, backups, `.env` and bank exports;
+- API keys, including the actual key values in your `.env`;
+- your own account numbers and household names, read from your local database.
+
+To block other words, such as your address or employer, list them one per line in `.privacy-blocklist`, which is itself git-ignored. Run `npm run privacy-check` to scan every file and the full history. The same check also runs on GitHub (`.github/workflows/privacy-check.yml`).
+
 ### 2. Run the Automated Tests
 ```bash
 npm test

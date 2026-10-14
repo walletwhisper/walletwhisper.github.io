@@ -33,6 +33,9 @@ backups/
 *.pem
 *.key
 
+# Your personal terms for scripts/privacy-check.mjs (names, addresses, account numbers)
+.privacy-blocklist
+
 # Editor / OS
 .DS_Store
 Thumbs.db

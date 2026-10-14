@@ -9,7 +9,9 @@
     "dev:server": "tsx watch src/server.ts",
     "dev:client": "cd client && npm run dev",
     "build:client": "cd client && npm run build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepare": "git config core.hooksPath .githooks || true",
+    "privacy-check": "node scripts/privacy-check.mjs --all"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
