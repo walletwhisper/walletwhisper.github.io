@@ -1,4 +1,5 @@
 import { createServer } from './src/server.ts';
+import { currentDataFolder } from './src/db.ts';
 import { exec } from 'child_process';
 
 const PORT = 8000;
@@ -8,7 +9,11 @@ async function start() {
   app.listen(PORT, '127.0.0.1', () => {
     const url = `http://127.0.0.1:${PORT}`;
     console.log(`\n======================================================`);
-    console.log(` Financial Characterizer is running at: ${url}`);
+    console.log(` WalletWhisper is running at: ${url}`);
+    const folder = currentDataFolder();
+    console.log(folder
+      ? ` Your data stays on this computer, in: ${folder}`
+      : ` First run: choose where to keep your data in the browser window.`);
     console.log(`======================================================\n`);
 
     // Auto-open browser on Windows/macOS/Linux

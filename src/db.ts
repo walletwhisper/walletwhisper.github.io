@@ -1,123 +1,109 @@
-import initSqlJs, { Database } from 'sql.js';
+import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { DEFAULT_CATEGORIES } from './taxonomy.js';
+import { runMigrations } from './migrations.js';
+import { dataFolder } from './config.js';
 
-let dbInstance: Database | null = null;
-const dbDir = path.resolve(process.cwd(), 'data');
-const dbFile = path.join(dbDir, 'app.db');
+export type Db = Database.Database;
 
-export async function getDb(): Promise<Database> {
-  if (dbInstance) return dbInstance;
+let dbInstance: Db | null = null;
 
-  const SQL = await initSqlJs();
+/**
+ * The folder the user chose for their data (app.db + backups/), or null before first-run setup.
+ * Tests set SPENDING_DB_PATH=':memory:' so they never touch real data.
+ */
+export function currentDataFolder(): string | null {
+  if (process.env.SPENDING_DB_PATH) return null;
+  return dataFolder();
+}
 
-  if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true });
+export function isSetUp(): boolean {
+  return !!process.env.SPENDING_DB_PATH || currentDataFolder() !== null;
+}
+
+/** Path of the live database. */
+export function dbPath(): string {
+  if (process.env.SPENDING_DB_PATH) return process.env.SPENDING_DB_PATH;
+  const folder = currentDataFolder();
+  if (!folder) throw new Error('No data folder chosen yet');
+  return path.join(folder, 'app.db');
+}
+
+export function backupDir(): string {
+  if (process.env.SPENDING_BACKUP_DIR) return process.env.SPENDING_BACKUP_DIR;
+  const folder = currentDataFolder();
+  return path.join(folder ?? path.resolve(process.cwd(), 'data'), 'backups');
+}
+
+/** Open a database, enable WAL + foreign keys, and bring the schema up to date. */
+export function openDb(file: string): Db {
+  if (file !== ':memory:') {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
   }
+  const db = new Database(file);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+  runMigrations(db, (fromVersion) => {
+    if (file !== ':memory:' && fromVersion > 0) backupDb(db, `pre-migration-v${fromVersion}`);
+  });
+  return db;
+}
 
-  if (fs.existsSync(dbFile)) {
-    const fileBuffer = fs.readFileSync(dbFile);
-    dbInstance = new SQL.Database(fileBuffer);
-  } else {
-    dbInstance = new SQL.Database();
+export function getDb(): Db {
+  if (!dbInstance) {
+    dbInstance = openDb(dbPath());
+    if (dbPath() !== ':memory:') dailyBackup(dbInstance);
   }
-
-  initSchema(dbInstance);
-  saveDb();
   return dbInstance;
 }
 
-export function saveDb(): void {
-  if (!dbInstance) return;
-  const data = dbInstance.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(dbFile, buffer);
+/** Close the shared instance (used by tests to get a fresh in-memory database). */
+export function resetDbInstance(): void {
+  dbInstance?.close();
+  dbInstance = null;
 }
 
-function initSchema(db: Database) {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS accounts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      profile_id TEXT NOT NULL,
-      bank TEXT NOT NULL,
-      account_type TEXT NOT NULL,
-      nickname TEXT
-    );
+/** Write a consistent snapshot to data/backups/<label>-<timestamp>.db. Returns the file path. */
+export function backupDb(db: Db, label: string): string | null {
+  if (db.memory) return null;
+  fs.mkdirSync(backupDir(), { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const file = path.join(backupDir(), `${label}-${stamp}.db`);
+  db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+  return file;
+}
 
-    CREATE TABLE IF NOT EXISTS imports (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      account_id INTEGER NOT NULL,
-      filename TEXT NOT NULL,
-      imported_at TEXT NOT NULL,
-      rows_added INTEGER NOT NULL,
-      rows_skipped INTEGER NOT NULL,
-      FOREIGN KEY (account_id) REFERENCES accounts(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS categories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      color TEXT NOT NULL,
-      is_system INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE IF NOT EXISTS rules (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      pattern TEXT NOT NULL,
-      category_id INTEGER NOT NULL,
-      priority INTEGER NOT NULL DEFAULT 10,
-      source TEXT NOT NULL, -- 'default' | 'user'
-      FOREIGN KEY (category_id) REFERENCES categories(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS transactions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      import_id INTEGER NOT NULL,
-      account_id INTEGER NOT NULL,
-      txn_date TEXT NOT NULL,
-      raw_description TEXT NOT NULL,
-      merchant TEXT NOT NULL,
-      amount_cents INTEGER NOT NULL,
-      kind TEXT NOT NULL,
-      category_id INTEGER NOT NULL,
-      category_source TEXT NOT NULL, -- 'manual' | 'user_rule' | 'default_rule' | 'bank' | 'uncategorized'
-      bank_category TEXT,
-      fingerprint TEXT NOT NULL UNIQUE,
-      FOREIGN KEY (import_id) REFERENCES imports(id),
-      FOREIGN KEY (account_id) REFERENCES accounts(id),
-      FOREIGN KEY (category_id) REFERENCES categories(id)
-    );
-  `);
-
-  // Seed default categories if empty
-  const res = db.exec("SELECT COUNT(*) as cnt FROM categories");
-  const count = res[0]?.values[0]?.[0] as number || 0;
-
-  if (count === 0) {
-    for (const cat of DEFAULT_CATEGORIES) {
-      db.run(
-        "INSERT INTO categories (name, color, is_system) VALUES (?, ?, ?)",
-        [cat.name, cat.color, cat.isSystem ? 1 : 0]
-      );
+/** One backup per day, keeping the newest 14 daily files. */
+function dailyBackup(db: Db): void {
+  try {
+    const dir = backupDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const today = new Date().toISOString().slice(0, 10);
+    const daily = fs.readdirSync(dir).filter(f => f.startsWith('daily-')).sort();
+    if (!daily.some(f => f.startsWith(`daily-${today}`))) {
+      backupDb(db, 'daily');
+      daily.push(`daily-${today}`);
     }
-
-    // Seed default keyword rules
-    const catRows = db.exec("SELECT id, name FROM categories");
-    const catMap = new Map<string, number>();
-    for (const row of catRows[0].values) {
-      catMap.set(row[1] as string, row[0] as number);
+    const all = fs.readdirSync(dir).filter(f => f.startsWith('daily-')).sort();
+    for (const old of all.slice(0, Math.max(0, all.length - 14))) {
+      fs.unlinkSync(path.join(dir, old));
     }
-
-    for (const catDef of DEFAULT_CATEGORIES) {
-      const catId = catMap.get(catDef.name);
-      if (!catId) continue;
-      for (const kw of catDef.keywords) {
-        db.run(
-          "INSERT INTO rules (pattern, category_id, priority, source) VALUES (?, ?, 1, 'default')",
-          [kw.toLowerCase(), catId]
-        );
-      }
-    }
+  } catch (err: any) {
+    console.warn('Daily backup failed:', err.message);
   }
+}
+
+export function audit(db: Db, action: string, detail: unknown): void {
+  db.prepare('INSERT INTO audit_log (at, action, detail) VALUES (?, ?, ?)')
+    .run(new Date().toISOString(), action, JSON.stringify(detail));
+}
+
+export function getSetting(db: Db, key: string, fallback: string): string {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return row ? row.value : fallback;
+}
+
+export function setSetting(db: Db, key: string, value: string): void {
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(key, value);
 }

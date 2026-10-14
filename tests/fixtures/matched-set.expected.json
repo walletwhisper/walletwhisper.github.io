@@ -1,0 +1,10 @@
+{
+  "description": "Chase1234 (credit) + Chase5678 (checking), October 2026. Amounts in cents.",
+  "creditSpendingCents": 15345,
+  "checkingSpendingBeforeReviewCents": 4884390,
+  "oneTimeCents": 4800000,
+  "untrackedTargetCardCents": 15000,
+  "payrollCents": 320000,
+  "householdZelleCents": 200000,
+  "cardPaymentCents": 81240
+}

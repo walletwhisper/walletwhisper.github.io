@@ -1,352 +1,636 @@
-import express from 'express';
-import cors from 'cors';
+import express, { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { getDb, saveDb } from './db.js';
-import { importCsvContent } from './importer.js';
-import { recategorizeWithLlm } from './llm.js';
+import { audit, backupDb, currentDataFolder, Db, dbPath, getDb, isSetUp, resetDbInstance } from './db.js';
+import { backupFileName, createBackup, isEncryptedBackup, prepareRestore, swapInDatabase } from './backup.js';
+import { compareWithBackup, MergePreview, mergeBackup, openBackupCopy } from './merge.js';
+import crypto from 'crypto';
+import os from 'os';
+import { suggestedDataFolder, updateConfig } from './config.js';
+import { AccountChoice, backfillLast4, finishImports, importCsvContent, previewCsv, accountLabel } from './importer.js';
+import { aiStatus, detectProvider, planQuestion, PROVIDER_NAMES, recategorizeWithLlm } from './llm.js';
+import { answerQuestion } from './ask.js';
+import { parseList, recompute, saveDecision } from './ledger.js';
+import { answerReview, getReviewItems, linkManually, pickColor, ReviewAnswer, setKindManually, unlink } from './review.js';
+import { FilterColumn, getColumnValues, getCoverage, getSummary, getTransactions, getTrends, parseFilters, StackBy } from './reports.js';
+import { requestGuard, RESET_CONFIRMATION, SESSION_TOKEN } from './security.js';
+
+import { UserError } from './errors.js';
+
+class BadRequest extends UserError {}
+
+/** Wrap a handler so thrown errors become JSON responses. */
+const h = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const out = fn(req, res);
+    if (out instanceof Promise) out.catch(next);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const idParam = (req: Request) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) throw new BadRequest('Invalid id');
+  return id;
+};
+
+const KINDS = new Set(['spend', 'refund', 'income', 'transfer', 'fee']);
+const ACCOUNT_TYPES = new Set(['checking', 'credit', 'savings', 'brokerage', 'other']);
+const CARD_POLICIES = new Set(['will_import', 'payments_are_spending']);
+
+/** Check a folder path typed by the user and make sure we can write there. Returns the absolute path. */
+function prepareFolder(input: unknown): string {
+  const raw = typeof input === 'string' ? input.trim().replace(/^["']|["']$/g, '') : '';
+  if (!raw) throw new BadRequest('Enter a folder path');
+  if (!path.isAbsolute(raw)) throw new BadRequest('Enter a full folder path, for example C:\\Users\\you\\Documents\\WalletWhisper');
+  const folder = path.resolve(raw);
+  try {
+    fs.mkdirSync(folder, { recursive: true });
+    fs.accessSync(folder, fs.constants.W_OK);
+  } catch {
+    throw new BadRequest(`WalletWhisper can't create or write to "${folder}". Choose another folder.`);
+  }
+  return folder;
+}
 
 export async function createServer() {
+  // Until the user picks a data folder (first run), only the setup endpoints work
+  let db!: Db;
+  let ready = false;
+  const openData = () => {
+    db = getDb();
+    backfillLast4(db);
+    recompute(db);
+    ready = true;
+  };
+  if (isSetUp()) openData();
+
   const app = express();
-  app.use(cors());
-  app.use(express.json());
-
-  const upload = multer({ storage: multer.memoryStorage() });
-
-  // 1. Upload one or more CSVs
-  app.post('/api/imports', upload.array('files'), async (req, res) => {
-    try {
-      const files = req.files as Express.Multer.File[];
-      if (!files || files.length === 0) {
-        return res.status(400).json({ error: 'No files uploaded' });
-      }
-
-      const db = await getDb();
-      const results = [];
-
-      for (const file of files) {
-        const text = file.buffer.toString('utf-8');
-        const result = importCsvContent(db, file.originalname, text);
-        results.push(result);
-      }
-
-      res.json({ results });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
+  app.disable('x-powered-by');
+  app.use(requestGuard);
+  app.use(express.json({ limit: '1mb' }));
+  app.use('/api', (req, res, next) => {
+    // Checking a backup file needs no database, so a new computer can do it before setup
+    if (ready || req.path === '/session' || req.path === '/setup' || req.path === '/backup/inspect') return next();
+    res.status(409).json({ error: 'Choose where to store your data first', setupRequired: true });
   });
 
-  // 2. List imports
-  app.get('/api/imports', async (req, res) => {
+  const upload = multer({
+    storage: multer.memoryStorage(), // raw CSVs are never written to disk
+    limits: { fileSize: 10 * 1024 * 1024, files: 20 }
+  });
+  const files = (req: Request) => {
+    const list = (req.files as Express.Multer.File[]) || [];
+    if (list.length === 0) throw new BadRequest('No files uploaded');
+    return list.map(f => ({ name: path.basename(f.originalname), text: f.buffer.toString('utf-8') }));
+  };
+
+  // ---------- Session ----------
+  app.get('/api/session', (_req, res) => {
+    res.set('Cache-Control', 'no-store').json({ token: SESSION_TOKEN });
+  });
+
+  // ---------- First-run setup: choose the data folder ----------
+  app.get('/api/setup', (_req, res) => {
+    res.json({ configured: ready, suggestedFolder: suggestedDataFolder() });
+  });
+
+  app.post('/api/setup', h((req, res) => {
+    if (ready) throw new BadRequest('WalletWhisper is already set up. Change the data folder in Settings.');
+    const folder = prepareFolder(req.body?.folder);
+    updateConfig({ dataFolder: folder });
+    openData();
+    res.json({ success: true, dataFolder: folder });
+  }));
+
+  // ---------- Imports ----------
+  app.post('/api/imports/preview', upload.array('files'), h((req, res) => {
+    res.json({ previews: files(req).map(f => previewCsv(db, f.name, f.text)) });
+  }));
+
+  app.post('/api/imports', upload.array('files'), h((req, res) => {
+    let choices: Record<string, AccountChoice> = {};
+    if (typeof req.body?.choices === 'string') {
+      try { choices = JSON.parse(req.body.choices); } catch { throw new BadRequest('Invalid account choices'); }
+    }
+    const results = files(req).map(f => {
+      try {
+        return importCsvContent(db, f.name, f.text, choices[f.name] || {});
+      } catch (err: any) {
+        return { filename: f.name, bank: 'Unknown', accountType: 'Unknown', rowsAdded: 0, rowsSkipped: 0, error: err.message };
+      }
+    });
+    const matched = finishImports(db);
+    audit(db, 'import', results.map(r => ({ file: r.filename, added: r.rowsAdded, error: r.error })));
+    res.json({ results, matched, reviewCount: getReviewItems(db).length });
+  }));
+
+  app.get('/api/imports', h((_req, res) => {
+    const rows = db.prepare(`
+      SELECT i.id, i.filename, i.imported_at AS importedAt, i.rows_added AS rowsAdded, i.rows_skipped AS rowsSkipped,
+             i.min_date AS minDate, i.max_date AS maxDate, a.nickname, a.bank, a.account_type, a.last4
+      FROM imports i JOIN accounts a ON a.id = i.account_id ORDER BY i.id DESC`).all() as any[];
+    res.json({ imports: rows.map(r => ({ ...r, account: accountLabel(r) })) });
+  }));
+
+  app.delete('/api/imports/:id', h((req, res) => {
+    const id = idParam(req);
+    const imp = db.prepare('SELECT filename FROM imports WHERE id = ?').get(id) as { filename: string } | undefined;
+    if (!imp) throw new BadRequest('Import not found');
+    const backup = backupDb(db, `before-undo-import-${id}`);
+    db.transaction(() => {
+      // Answers we gave stay in `decisions` and come back if the file is imported again
+      db.prepare('DELETE FROM transactions WHERE import_id = ?').run(id);
+      db.prepare('DELETE FROM imports WHERE id = ?').run(id);
+    })();
+    recompute(db);
+    audit(db, 'undo_import', { id, filename: imp.filename, backup });
+    res.json({ success: true });
+  }));
+
+  // ---------- Reference data ----------
+  app.get('/api/categories', h((_req, res) => {
+    const rows = db.prepare('SELECT id, name, color, is_system AS isSystem FROM categories ORDER BY name').all() as any[];
+    res.json({ categories: rows.map(r => ({ ...r, isSystem: r.isSystem === 1 })) });
+  }));
+
+  // ---------- Reports ----------
+  app.get('/api/summary', h((req, res) => {
+    res.json(getSummary(db, parseFilters(req.query)));
+  }));
+
+  app.get('/api/trends', h((req, res) => {
+    const months = Math.min(Math.max(Number(req.query.months) || 12, 1), 60);
+    const stack = (['category', 'person', 'account'].includes(String(req.query.stack)) ? req.query.stack : 'category') as StackBy;
+    res.json(getTrends(db, parseFilters(req.query), months, stack));
+  }));
+
+  app.get('/api/coverage', h((_req, res) => {
+    res.json(getCoverage(db));
+  }));
+
+  app.get('/api/transactions', h((req, res) => {
+    const kind = ['spending', 'transfer', 'income', 'all'].includes(String(req.query.kind)) ? String(req.query.kind) : 'spending';
+    res.json(getTransactions(db, parseFilters(req.query), kind));
+  }));
+
+  // Values for an Excel-style column filter (merchant, account, person, category)
+  app.get('/api/transactions/values', h((req, res) => {
+    const kind = ['spending', 'transfer', 'income', 'all'].includes(String(req.query.kind)) ? String(req.query.kind) : 'spending';
+    const column = String(req.query.column);
+    if (!['merchant', 'account', 'person', 'category'].includes(column)) throw new BadRequest('Unknown column');
+    res.json({ values: getColumnValues(db, parseFilters(req.query), kind, column as FilterColumn) });
+  }));
+
+  // ---------- Editing transactions ----------
+  app.patch('/api/transactions/:id', h((req, res) => {
+    const id = idParam(req);
+    const body = req.body || {};
+    const txn = db.prepare('SELECT id, merchant, fingerprint FROM transactions WHERE id = ?').get(id) as { id: number; merchant: string; fingerprint: string } | undefined;
+    if (!txn) return res.status(404).json({ error: 'Transaction not found' });
+
+    db.transaction(() => {
+      if (body.categoryId !== undefined) {
+        const categoryId = Number(body.categoryId);
+        if (!db.prepare('SELECT 1 FROM categories WHERE id = ?').get(categoryId)) throw new BadRequest('Unknown category');
+        db.prepare("UPDATE transactions SET category_id = ?, category_source = 'manual' WHERE id = ?").run(categoryId, id);
+        saveDecision(db, txn.fingerprint, { category_id: categoryId });
+        if (body.remember) {
+          db.prepare("DELETE FROM rules WHERE source = 'user' AND pattern = ?").run(txn.merchant.toLowerCase());
+          db.prepare("INSERT INTO rules (pattern, category_id, priority, source) VALUES (?, ?, 10, 'user')").run(txn.merchant.toLowerCase(), categoryId);
+        }
+      }
+      if (body.personId !== undefined) {
+        const personId = body.personId === null ? null : Number(body.personId);
+        if (personId !== null && !db.prepare('SELECT 1 FROM people WHERE id = ?').get(personId)) throw new BadRequest('Unknown person');
+        db.prepare("UPDATE transactions SET person_id = ?, person_source = ? WHERE id = ?").run(personId, personId ? 'manual' : null, id);
+        saveDecision(db, txn.fingerprint, { person_id: personId });
+        if (body.rememberPerson && personId) {
+          db.prepare('INSERT INTO person_rules (pattern, person_id) VALUES (?, ?) ON CONFLICT(pattern) DO UPDATE SET person_id = excluded.person_id')
+            .run(txn.merchant.toLowerCase(), personId);
+        }
+      }
+      if (body.kind !== undefined) {
+        if (!KINDS.has(body.kind)) throw new BadRequest('Unknown kind');
+        setKindManually(db, id, body.kind);
+      }
+      if (body.hidden !== undefined) {
+        const v = body.hidden ? 1 : 0;
+        db.prepare('UPDATE transactions SET is_one_time = ? WHERE id = ?').run(v, id);
+        saveDecision(db, txn.fingerprint, { is_one_time: v });
+      }
+    })();
+    recompute(db);
+    res.json({ success: true });
+  }));
+
+  // Bulk: assign a person (or category) to many rows at once
+  app.patch('/api/transactions', h((req, res) => {
+    const { ids, personId, categoryId, hidden } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > 5000 || !ids.every((x: unknown) => Number.isInteger(x))) {
+      throw new BadRequest('ids must be a non-empty list of transaction ids');
+    }
+    if (personId !== undefined && personId !== null && !db.prepare('SELECT 1 FROM people WHERE id = ?').get(personId)) throw new BadRequest('Unknown person');
+    if (categoryId !== undefined && !db.prepare('SELECT 1 FROM categories WHERE id = ?').get(categoryId)) throw new BadRequest('Unknown category');
+    const fpOf = db.prepare('SELECT fingerprint FROM transactions WHERE id = ?');
+    let updated = 0;
+    db.transaction(() => {
+      for (const id of ids as number[]) {
+        const row = fpOf.get(id) as { fingerprint: string } | undefined;
+        if (!row) continue;
+        if (personId !== undefined) {
+          db.prepare('UPDATE transactions SET person_id = ?, person_source = ? WHERE id = ?').run(personId, personId ? 'manual' : null, id);
+          saveDecision(db, row.fingerprint, { person_id: personId });
+        }
+        if (categoryId !== undefined) {
+          db.prepare("UPDATE transactions SET category_id = ?, category_source = 'manual' WHERE id = ?").run(categoryId, id);
+          saveDecision(db, row.fingerprint, { category_id: categoryId });
+        }
+        if (hidden !== undefined) {
+          const v = hidden ? 1 : 0;
+          db.prepare('UPDATE transactions SET is_one_time = ? WHERE id = ?').run(v, id);
+          saveDecision(db, row.fingerprint, { is_one_time: v });
+        }
+        updated++;
+      }
+    })();
+    recompute(db);
+    res.json({ success: true, updated });
+  }));
+
+  // ---------- Transfer links ----------
+  app.post('/api/transfer-links', h((req, res) => {
+    const { outId, inId } = req.body || {};
+    if (!Number.isInteger(outId) || !Number.isInteger(inId)) throw new BadRequest('outId and inId are required');
+    db.transaction(() => linkManually(db, outId, inId))();
+    recompute(db);
+    res.json({ success: true });
+  }));
+
+  app.delete('/api/transfer-links/:id', h((req, res) => {
+    const id = idParam(req);
+    db.transaction(() => unlink(db, id))();
+    recompute(db);
+    res.json({ success: true });
+  }));
+
+  // ---------- Review inbox ----------
+  app.get('/api/review', h((_req, res) => {
+    res.json({ items: getReviewItems(db) });
+  }));
+
+  app.post('/api/review/answer', h((req, res) => {
+    answerReview(db, req.body as ReviewAnswer);
+    res.json({ success: true, reviewCount: getReviewItems(db).length });
+  }));
+
+  // ---------- Accounts ----------
+  app.get('/api/accounts', h((_req, res) => {
+    const rows = db.prepare(`
+      SELECT a.id, a.profile_id AS profileId, a.bank, a.account_type AS accountType, a.nickname, a.last4,
+             a.is_tracked AS isTracked, a.card_policy AS cardPolicy, a.match_patterns AS matchPatterns,
+             a.default_person_id AS defaultPersonId,
+             (SELECT COUNT(*) FROM transactions t WHERE t.account_id = a.id) AS txnCount,
+             (SELECT COUNT(*) FROM transactions t WHERE t.counterparty_account_id = a.id) AS counterpartyCount
+      FROM accounts a ORDER BY a.is_tracked DESC, a.id`).all() as any[];
+    res.json({
+      accounts: rows.map(r => ({
+        ...r,
+        label: accountLabel({ nickname: r.nickname, bank: r.bank, account_type: r.accountType, last4: r.last4 }),
+        isTracked: r.isTracked === 1,
+        matchPatterns: parseList(r.matchPatterns)
+      }))
+    });
+  }));
+
+  // Add an account we own but don't import (savings, brokerage, another bank's card)
+  app.post('/api/accounts', h((req, res) => {
+    const { nickname, accountType, cardPolicy, matchPatterns } = req.body || {};
+    if (typeof nickname !== 'string' || !nickname.trim()) throw new BadRequest('Name is required');
+    if (!ACCOUNT_TYPES.has(accountType)) throw new BadRequest('Unknown account type');
+    const policy = accountType === 'credit' ? (CARD_POLICIES.has(cardPolicy) ? cardPolicy : 'will_import') : null;
+    const patterns = Array.isArray(matchPatterns) ? matchPatterns.filter((p: unknown) => typeof p === 'string' && p.trim().length >= 4) : [];
+    const id = db.prepare(`INSERT INTO accounts (profile_id, bank, account_type, nickname, is_tracked, card_policy, match_patterns)
+      VALUES ('', ?, ?, ?, 0, ?, ?)`).run(nickname.trim(), accountType, nickname.trim(), policy, JSON.stringify(patterns)).lastInsertRowid;
+    recompute(db);
+    res.json({ success: true, id: Number(id) });
+  }));
+
+  app.patch('/api/accounts/:id', h((req, res) => {
+    const id = idParam(req);
+    const acct = db.prepare('SELECT id, account_type, is_tracked FROM accounts WHERE id = ?').get(id) as { account_type: string; is_tracked: number } | undefined;
+    if (!acct) throw new BadRequest('Account not found');
+    const b = req.body || {};
+    if (b.nickname !== undefined) {
+      if (typeof b.nickname !== 'string' || !b.nickname.trim()) throw new BadRequest('Name is required');
+      db.prepare('UPDATE accounts SET nickname = ? WHERE id = ?').run(b.nickname.trim(), id);
+    }
+    if (b.defaultPersonId !== undefined) {
+      if (b.defaultPersonId !== null && !db.prepare('SELECT 1 FROM people WHERE id = ?').get(b.defaultPersonId)) throw new BadRequest('Unknown person');
+      db.prepare('UPDATE accounts SET default_person_id = ? WHERE id = ?').run(b.defaultPersonId, id);
+    }
+    if (b.cardPolicy !== undefined) {
+      if (!CARD_POLICIES.has(b.cardPolicy)) throw new BadRequest('Unknown card policy');
+      db.prepare('UPDATE accounts SET card_policy = ? WHERE id = ?').run(b.cardPolicy, id);
+    }
+    if (b.accountType !== undefined && !acct.is_tracked) {
+      if (!ACCOUNT_TYPES.has(b.accountType)) throw new BadRequest('Unknown account type');
+      db.prepare("UPDATE accounts SET account_type = ?, card_policy = CASE WHEN ? = 'credit' THEN COALESCE(card_policy, 'will_import') ELSE NULL END WHERE id = ?")
+        .run(b.accountType, b.accountType, id);
+    }
+    if (b.matchPatterns !== undefined) {
+      if (!Array.isArray(b.matchPatterns)) throw new BadRequest('matchPatterns must be a list');
+      const patterns = b.matchPatterns.map((p: unknown) => String(p).trim()).filter((p: string) => p.length >= 4);
+      db.prepare('UPDATE accounts SET match_patterns = ? WHERE id = ?').run(JSON.stringify(patterns), id);
+    }
+    recompute(db);
+    res.json({ success: true });
+  }));
+
+  app.delete('/api/accounts/:id', h((req, res) => {
+    const id = idParam(req);
+    const acct = db.prepare('SELECT is_tracked FROM accounts WHERE id = ?').get(id) as { is_tracked: number } | undefined;
+    if (!acct) throw new BadRequest('Account not found');
+    if (acct.is_tracked) throw new BadRequest('This account has imported transactions; undo its imports instead');
+    db.transaction(() => {
+      db.prepare('UPDATE transactions SET counterparty_account_id = NULL WHERE counterparty_account_id = ?').run(id);
+      db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
+    })();
+    recompute(db);
+    res.json({ success: true });
+  }));
+
+  // ---------- People ----------
+  app.get('/api/people', h((_req, res) => {
+    const rows = db.prepare(`SELECT p.id, p.name, p.color, p.aliases,
+      (SELECT COUNT(*) FROM transactions t WHERE t.person_id = p.id) AS txnCount FROM people p ORDER BY p.id`).all() as any[];
+    res.json({ people: rows.map(r => ({ ...r, aliases: parseList(r.aliases) })) });
+  }));
+
+  app.post('/api/people', h((req, res) => {
+    const { name, color } = req.body || {};
+    if (typeof name !== 'string' || !name.trim()) throw new BadRequest('Name is required');
+    if (db.prepare('SELECT 1 FROM people WHERE name = ?').get(name.trim())) throw new BadRequest('That name already exists');
+    const c = typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color) ? color : pickColor(db);
+    const id = db.prepare('INSERT INTO people (name, color) VALUES (?, ?)').run(name.trim(), c).lastInsertRowid;
+    res.json({ success: true, id: Number(id) });
+  }));
+
+  app.patch('/api/people/:id', h((req, res) => {
+    const id = idParam(req);
+    const { name, color, aliases } = req.body || {};
+    if (!db.prepare('SELECT 1 FROM people WHERE id = ?').get(id)) throw new BadRequest('Person not found');
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim()) throw new BadRequest('Name is required');
+      db.prepare('UPDATE people SET name = ? WHERE id = ?').run(name.trim(), id);
+    }
+    if (color !== undefined) {
+      if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) throw new BadRequest('Color must look like #RRGGBB');
+      db.prepare('UPDATE people SET color = ? WHERE id = ?').run(color, id);
+    }
+    if (aliases !== undefined) {
+      if (!Array.isArray(aliases)) throw new BadRequest('aliases must be a list');
+      const list = aliases.map((a: unknown) => String(a).trim()).filter((a: string) => a.length >= 3);
+      db.prepare('UPDATE people SET aliases = ? WHERE id = ?').run(JSON.stringify(list), id);
+    }
+    recompute(db);
+    res.json({ success: true });
+  }));
+
+  app.delete('/api/people/:id', h((req, res) => {
+    const id = idParam(req);
+    db.transaction(() => {
+      db.prepare('UPDATE decisions SET person_id = NULL WHERE person_id = ?').run(id);
+      db.prepare("UPDATE transactions SET person_id = NULL, person_source = NULL WHERE person_id = ?").run(id);
+      db.prepare('DELETE FROM people WHERE id = ?').run(id);
+    })();
+    recompute(db);
+    res.json({ success: true });
+  }));
+
+  // ---------- Remembered rules ----------
+  app.get('/api/rules', h((_req, res) => {
+    const category = db.prepare(`SELECT r.id, r.pattern, c.name AS target FROM rules r JOIN categories c ON c.id = r.category_id
+      WHERE r.source = 'user' ORDER BY r.pattern`).all();
+    const person = db.prepare(`SELECT r.id, r.pattern, p.name AS target FROM person_rules r JOIN people p ON p.id = r.person_id
+      ORDER BY r.pattern`).all();
+    res.json({ category, person });
+  }));
+
+  app.delete('/api/rules/:id', h((req, res) => {
+    db.prepare("DELETE FROM rules WHERE id = ? AND source = 'user'").run(idParam(req));
+    recompute(db);
+    res.json({ success: true });
+  }));
+
+  app.delete('/api/person-rules/:id', h((req, res) => {
+    db.prepare('DELETE FROM person_rules WHERE id = ?').run(idParam(req));
+    recompute(db);
+    res.json({ success: true });
+  }));
+
+  // ---------- Settings ----------
+  app.get('/api/settings', h((_req, res) => {
+    const ai = aiStatus();
+    res.json({
+      dataFolder: currentDataFolder(),
+      aiConfigured: ai.provider !== null,
+      aiProvider: ai.providerName,
+      aiKeyInEnvFile: ai.fromEnvFile,
+    });
+  }));
+
+  // Save or remove the AI key. It goes to the user's settings file, never into the project folder.
+  app.put('/api/settings/ai', h((req, res) => {
+    const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+    if (key) {
+      const provider = detectProvider(key);
+      if (!provider) throw new BadRequest("That doesn't look like a Claude, Gemini or OpenAI API key. Copy the whole key and try again.");
+      updateConfig({ aiKey: key });
+      audit(db, 'ai_key_saved', { provider });
+      res.json({ success: true, aiProvider: PROVIDER_NAMES[provider] });
+    } else {
+      updateConfig({ aiKey: undefined });
+      audit(db, 'ai_key_removed', {});
+      res.json({ success: true, aiProvider: aiStatus().providerName });
+    }
+  }));
+
+  // Move the data to another folder. The old copy is left in place for the user to delete.
+  app.post('/api/settings/data-folder', h((req, res) => {
+    const current = currentDataFolder();
+    if (!current) throw new BadRequest('The data folder cannot be changed in this mode');
+    const folder = prepareFolder(req.body?.folder);
+    if (path.resolve(folder) === path.resolve(current)) throw new BadRequest('That is already your data folder');
+    const target = path.join(folder, 'app.db');
+    if (fs.existsSync(target)) throw new BadRequest('That folder already has WalletWhisper data in it. Choose an empty folder.');
+    db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+    audit(db, 'data_folder_moved', { to: folder });
+    resetDbInstance();
+    updateConfig({ dataFolder: folder });
+    openData();
+    res.json({ success: true, dataFolder: folder, oldFolder: current });
+  }));
+
+  // ---------- Ask (opt-in AI) ----------
+  // Only the question, today's date and category names go to the AI; the answer is computed here
+  app.post('/api/ask', h(async (req, res) => {
+    const question = typeof req.body?.question === 'string' ? req.body.question.trim() : '';
+    if (!question) throw new BadRequest('Type a question first');
+    if (question.length > 300) throw new BadRequest('Please keep the question under 300 characters');
+    const categoryNames = (db.prepare('SELECT name FROM categories ORDER BY name').all() as { name: string }[])
+      .map(c => c.name).filter(n => !['Transfer', 'Income', 'Credit card (untracked)'].includes(n));
+    const today = new Date().toISOString().slice(0, 10);
+    const plan = await planQuestion(question, categoryNames, today);
+    res.json(answerQuestion(db, plan));
+  }));
+
+  // ---------- AI (opt-in) ----------
+  app.post('/api/ai/recategorize', h(async (_req, res) => {
+    const result = await recategorizeWithLlm(db);
+    recompute(db);
+    audit(db, 'ai_recategorize', { reviewed: result.reviewed, changed: result.changed });
+    res.json(result);
+  }));
+
+  // ---------- Move to another computer: backup file export / restore ----------
+  const backupUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024, files: 1 } });
+  const backupFile = (req: Request) => {
+    const file = req.file;
+    if (!file) throw new BadRequest('Choose a backup file');
+    const password = typeof req.body?.password === 'string' && req.body.password ? req.body.password : undefined;
+    return { buffer: file.buffer, password };
+  };
+
+  app.post('/api/backup/export', h((req, res) => {
+    const password = typeof req.body?.password === 'string' && req.body.password ? req.body.password : undefined;
+    if (password && password.length < 8) throw new BadRequest('Use a password of at least 8 characters');
+    const file = createBackup(db, password);
+    audit(db, 'backup_exported', { encrypted: !!password, bytes: file.length });
+    res.set({
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${backupFileName()}"`,
+      'Cache-Control': 'no-store',
+    }).send(file);
+  }));
+
+  // Look inside a backup before restoring it, so the user can confirm what they're about to load
+  app.post('/api/backup/inspect', backupUpload.single('file'), h((req, res) => {
+    const { buffer, password } = backupFile(req);
+    if (isEncryptedBackup(buffer) && !password) return res.json({ needsPassword: true });
+    const { tmpPath, info } = prepareRestore(buffer, password);
+    fs.rmSync(tmpPath, { force: true });
+    res.json({ needsPassword: false, info });
+  }));
+
+  // Compare a backup with the data here, then combine them with the user's choices.
+  // The checked copy waits on disk (temp folder) between the two steps, for up to 30 minutes.
+  const pendingMerges = new Map<string, { tmpPath: string; created: number }>();
+  // Unpacked backups left behind if the app was closed mid-way hold real data: clear them at startup
+  // (only ones older than the 30-minute window, so another running copy's work in progress is left alone)
+  for (const f of fs.readdirSync(os.tmpdir()).filter(n => /^walletwhisper-(restore|export)-.*\.db$/.test(n))) {
+    const file = path.join(os.tmpdir(), f);
     try {
-      const db = await getDb();
-      const rows = db.exec(`
-        SELECT i.id, i.filename, i.imported_at, i.rows_added, i.rows_skipped, a.bank, a.account_type
-        FROM imports i
-        JOIN accounts a ON i.account_id = a.id
-        ORDER BY i.id DESC
+      if (Date.now() - fs.statSync(file).mtimeMs > 30 * 60_000) fs.rmSync(file, { force: true });
+    } catch { /* in use or already gone */ }
+  }
+  const dropPending = (id: string) => {
+    const p = pendingMerges.get(id);
+    if (p) fs.rmSync(p.tmpPath, { force: true });
+    pendingMerges.delete(id);
+  };
+
+  app.post('/api/backup/compare', backupUpload.single('file'), h((req, res) => {
+    for (const [id, p] of pendingMerges) if (Date.now() - p.created > 30 * 60_000) dropPending(id);
+    const { buffer, password } = backupFile(req);
+    const { tmpPath, info } = prepareRestore(buffer, password);
+    let preview: MergePreview;
+    try {
+      const other = openBackupCopy(tmpPath);
+      try { preview = compareWithBackup(db, other); } finally { other.close(); } // close before any delete (Windows)
+    } catch (err) {
+      fs.rmSync(tmpPath, { force: true });
+      throw err;
+    }
+    if (preview.identical) {
+      fs.rmSync(tmpPath, { force: true });
+      return res.json({ compareId: null, info, preview });
+    }
+    const compareId = crypto.randomBytes(12).toString('hex');
+    pendingMerges.set(compareId, { tmpPath, created: Date.now() });
+    res.json({ compareId, info, preview });
+  }));
+
+  app.post('/api/backup/merge', h((req, res) => {
+    const pending = pendingMerges.get(String(req.body?.compareId));
+    if (!pending) throw new BadRequest('That comparison has expired. Choose the backup file again.');
+    const choices: Record<string, 'mine' | 'theirs'> = {};
+    for (const [k, v] of Object.entries(req.body?.choices ?? {})) if (v === 'mine' || v === 'theirs') choices[k] = v;
+    const saved = backupDb(db, 'before-merge');
+    const other = openBackupCopy(pending.tmpPath);
+    try {
+      const result = mergeBackup(db, other, { choices, removeLocalOnly: req.body?.removeLocalOnly === true });
+      audit(db, 'backup_merged', { ...result, conflictsResolved: Object.keys(choices).length, previousDataSavedTo: saved });
+      res.json({ success: true, ...result });
+    } finally {
+      other.close();
+      dropPending(String(req.body.compareId));
+    }
+  }));
+
+  app.post('/api/backup/restore', backupUpload.single('file'), h((req, res) => {
+    const { buffer, password } = backupFile(req);
+    const hasData = (db.prepare('SELECT COUNT(*) AS n FROM transactions').get() as { n: number }).n > 0;
+    if (hasData && req.body?.confirm !== 'REPLACE') throw new BadRequest('Restoring replaces the data on this computer. Confirm to continue.');
+    if (!currentDataFolder()) throw new BadRequest('Restoring is not available in this mode');
+    const { tmpPath, info } = prepareRestore(buffer, password);
+    const saved = backupDb(db, 'before-restore');
+    resetDbInstance();
+    swapInDatabase(tmpPath, dbPath());
+    openData(); // runs any schema upgrades for backups from older versions
+    audit(db, 'backup_restored', { ...info, previousDataSavedTo: saved });
+    res.json({ success: true, info });
+  }));
+
+  // ---------- Reset ----------
+  app.post('/api/reset', h((req, res) => {
+    if (req.body?.confirm !== RESET_CONFIRMATION) {
+      throw new BadRequest(`To reset, type "${RESET_CONFIRMATION}" to confirm`);
+    }
+    const backup = backupDb(db, 'before-reset');
+    db.transaction(() => {
+      db.exec(`
+        DELETE FROM transfer_links;
+        DELETE FROM transactions;
+        DELETE FROM imports;
+        DELETE FROM accounts;
+        DELETE FROM rules WHERE source = 'user';
+        DELETE FROM person_rules;
+        DELETE FROM decisions;
+        DELETE FROM not_pairs;
       `);
-      if (rows.length === 0) return res.json({ imports: [] });
+    })();
+    audit(db, 'reset', { backup });
+    res.json({ success: true, backup: backup ? path.basename(backup) : null });
+  }));
 
-      const imports = rows[0].values.map(v => ({
-        id: v[0],
-        filename: v[1],
-        importedAt: v[2],
-        rowsAdded: v[3],
-        rowsSkipped: v[4],
-        bank: v[5],
-        accountType: v[6]
-      }));
-      res.json({ imports });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
+  // ---------- Errors ----------
+  app.use('/api', (_req: Request, res: Response) => res.status(404).json({ error: 'Not found' }));
+  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof UserError) return res.status(400).json({ error: err.message });
+    if (err?.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'File too large (limit 10 MB)' });
+    console.error(err);
+    res.status(500).json({ error: err?.message || 'Server error' });
   });
 
-  // 3. Undo / delete an import
-  app.delete('/api/imports/:id', async (req, res) => {
-    try {
-      const db = await getDb();
-      const id = parseInt(req.params.id);
-      db.run("DELETE FROM transactions WHERE import_id = ?", [id]);
-      db.run("DELETE FROM imports WHERE id = ?", [id]);
-      saveDb();
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 4. Categories list
-  app.get('/api/categories', async (req, res) => {
-    try {
-      const db = await getDb();
-      const rows = db.exec("SELECT id, name, color, is_system FROM categories ORDER BY name ASC");
-      if (rows.length === 0) return res.json({ categories: [] });
-      const categories = rows[0].values.map(v => ({
-        id: v[0],
-        name: v[1],
-        color: v[2],
-        isSystem: Boolean(v[3])
-      }));
-      res.json({ categories });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 5. Summary dashboard data
-  app.get('/api/summary', async (req, res) => {
-    try {
-      const db = await getDb();
-      const { from, to } = req.query as { from?: string; to?: string };
-
-      let dateFilter = "1=1";
-      const params: any[] = [];
-      if (from) {
-        dateFilter += " AND t.txn_date >= ?";
-        params.push(from);
-      }
-      if (to) {
-        dateFilter += " AND t.txn_date <= ?";
-        params.push(to);
-      }
-
-      // Total spend: spend, refund, fee
-      const spendQuery = db.exec(`
-        SELECT 
-          COALESCE(SUM(amount_cents), 0) as total_spend,
-          COUNT(*) as txn_count
-        FROM transactions t
-        WHERE ${dateFilter} AND t.kind IN ('spend', 'refund', 'fee')
-      `, params);
-
-      const totalSpend = (spendQuery[0]?.values[0]?.[0] as number) || 0;
-      const totalTxnCount = (spendQuery[0]?.values[0]?.[1] as number) || 0;
-
-      // Money in
-      const incomeQuery = db.exec(`
-        SELECT COALESCE(SUM(amount_cents), 0)
-        FROM transactions t
-        WHERE ${dateFilter} AND t.kind = 'income'
-      `, params);
-      const moneyIn = (incomeQuery[0]?.values[0]?.[0] as number) || 0;
-
-      // By category (spending only, excluding transfers and income)
-      const catQuery = db.exec(`
-        SELECT 
-          c.id, c.name, c.color, 
-          COALESCE(SUM(t.amount_cents), 0) as cat_spend,
-          COUNT(t.id) as count
-        FROM categories c
-        JOIN transactions t ON t.category_id = c.id
-        WHERE ${dateFilter} AND t.kind IN ('spend', 'refund', 'fee')
-        GROUP BY c.id
-        HAVING cat_spend > 0
-        ORDER BY cat_spend DESC
-      `, params);
-
-      const byCategory = (catQuery[0]?.values || []).map(v => {
-        const cents = v[3] as number;
-        return {
-          id: v[0],
-          name: v[1],
-          color: v[2],
-          cents,
-          count: v[4],
-          pct: totalSpend > 0 ? Math.round((cents / totalSpend) * 1000) / 10 : 0
-        };
-      });
-
-      // By month
-      const monthQuery = db.exec(`
-        SELECT 
-          SUBSTR(t.txn_date, 1, 7) as month,
-          COALESCE(SUM(t.amount_cents), 0) as month_spend
-        FROM transactions t
-        WHERE t.kind IN ('spend', 'refund', 'fee')
-        GROUP BY month
-        ORDER BY month ASC
-      `);
-
-      const byMonth = (monthQuery[0]?.values || []).map(v => ({
-        month: v[0],
-        cents: v[1]
-      }));
-
-      res.json({
-        totalSpend,
-        moneyIn,
-        totalTxnCount,
-        byCategory,
-        byMonth
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 6. Transactions query
-  app.get('/api/transactions', async (req, res) => {
-    try {
-      const db = await getDb();
-      const { from, to, categoryId, month, q, kind } = req.query as Record<string, string | undefined>;
-
-      let whereClause = "1=1";
-      const params: any[] = [];
-
-      if (from) {
-        whereClause += " AND t.txn_date >= ?";
-        params.push(from);
-      }
-      if (to) {
-        whereClause += " AND t.txn_date <= ?";
-        params.push(to);
-      }
-      if (month) {
-        whereClause += " AND t.txn_date LIKE ?";
-        params.push(`${month}%`);
-      }
-      if (categoryId) {
-        whereClause += " AND t.category_id = ?";
-        params.push(parseInt(categoryId));
-      }
-      if (q) {
-        whereClause += " AND (t.merchant LIKE ? OR t.raw_description LIKE ?)";
-        params.push(`%${q}%`, `%${q}%`);
-      }
-      if (kind) {
-        whereClause += " AND t.kind = ?";
-        params.push(kind);
-      } else {
-        // By default show spend, refund, fee
-        whereClause += " AND t.kind IN ('spend', 'refund', 'fee')";
-      }
-
-      const rows = db.exec(`
-        SELECT 
-          t.id, t.txn_date, t.raw_description, t.merchant, t.amount_cents,
-          t.kind, t.category_id, t.category_source, t.bank_category,
-          c.name as category_name, c.color as category_color,
-          a.bank, a.account_type
-        FROM transactions t
-        JOIN categories c ON t.category_id = c.id
-        JOIN accounts a ON t.account_id = a.id
-        WHERE ${whereClause}
-        ORDER BY t.txn_date DESC, t.id DESC
-      `, params);
-
-      if (rows.length === 0) {
-        return res.json({ transactions: [], count: 0, sumCents: 0 });
-      }
-
-      let sumCents = 0;
-      const transactions = rows[0].values.map(v => {
-        const cents = v[4] as number;
-        sumCents += cents;
-        return {
-          id: v[0],
-          date: v[1],
-          rawDescription: v[2],
-          merchant: v[3],
-          amountCents: cents,
-          kind: v[5],
-          categoryId: v[6],
-          categorySource: v[7],
-          bankCategory: v[8],
-          categoryName: v[9],
-          categoryColor: v[10],
-          bank: v[11],
-          accountType: v[12]
-        };
-      });
-
-      res.json({
-        transactions,
-        count: transactions.length,
-        sumCents
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 7. Update transaction category + optional "remember" rule
-  app.patch('/api/transactions/:id', async (req, res) => {
-    try {
-      const db = await getDb();
-      const id = parseInt(req.params.id);
-      const { categoryId, remember } = req.body as { categoryId: number; remember?: boolean };
-
-      // Get transaction merchant
-      const txnQuery = db.exec("SELECT merchant FROM transactions WHERE id = ?", [id]);
-      if (txnQuery.length === 0 || txnQuery[0].values.length === 0) {
-        return res.status(404).json({ error: 'Transaction not found' });
-      }
-      const merchant = txnQuery[0].values[0][0] as string;
-
-      // Update this transaction
-      db.run(
-        "UPDATE transactions SET category_id = ?, category_source = 'manual' WHERE id = ?",
-        [categoryId, id]
-      );
-
-      // If remember is true, create user rule and retroactively apply to non-manual rows
-      if (remember) {
-        db.run(
-          "INSERT INTO rules (pattern, category_id, priority, source) VALUES (?, ?, 10, 'user')",
-          [merchant.toLowerCase(), categoryId]
-        );
-
-        // Retroactively update all other transactions for this merchant that are NOT manual
-        db.run(
-          `UPDATE transactions 
-           SET category_id = ?, category_source = 'user_rule' 
-           WHERE LOWER(merchant) = ? AND category_source != 'manual'`,
-          [categoryId, merchant.toLowerCase()]
-        );
-      }
-
-      saveDb();
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 8. AI recategorization using the LLM key in .env
-  app.post('/api/ai/recategorize', async (req, res) => {
-    try {
-      const db = await getDb();
-      const result = await recategorizeWithLlm(db);
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 9. Reset all data (wipe transactions, imports, accounts, user rules)
-  app.post('/api/reset', async (req, res) => {
-    try {
-      const db = await getDb();
-      db.run("DELETE FROM transactions");
-      db.run("DELETE FROM imports");
-      db.run("DELETE FROM accounts");
-      db.run("DELETE FROM rules WHERE source = 'user'");
-      saveDb();
-      res.json({ success: true, message: 'All transactions and imports have been reset.' });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // Serve static client if dist folder exists
+  // ---------- Client ----------
   const clientDist = path.resolve(process.cwd(), 'client', 'dist');
   if (fs.existsSync(clientDist)) {
     app.use(express.static(clientDist));
     app.use((req, res, next) => {
-      if (req.path.startsWith('/api')) return next();
+      if (req.method !== 'GET') return next();
       res.sendFile(path.join(clientDist, 'index.html'));
     });
   }
