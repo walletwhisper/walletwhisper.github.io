@@ -1,5 +1,5 @@
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts';
-import type { Trends as TrendsData } from '../api';
+import type { IncomeMonth, Trends as TrendsData } from '../api';
 import { qs } from '../api';
 import { useFetch, useStore } from '../store';
 import { formatCents, monthLabel, shortMoney, shortMonth, useRoute } from '../lib';
@@ -118,6 +118,59 @@ export function Trends() {
           </p>
         )}
       </Card>
+
+      {data && <MoneyIn months={data.income} onPick={month => navigate('transactions', { kind: 'income', month, person: params.person ?? '', acct: params.acct ?? '' })} />}
     </div>
+  );
+}
+
+const INCOME_GREEN = '#1f8a3b';
+
+/** Money in per month: one green series (green always means money in across the app). */
+function MoneyIn({ months, onPick }: { months: IncomeMonth[]; onPick: (month: string) => void }) {
+  const total = months.reduce((s, m) => s + m.cents, 0);
+  const withIncome = months.filter(m => m.cents > 0 && m.complete);
+  const average = withIncome.length ? Math.round(withIncome.reduce((s, m) => s + m.cents, 0) / withIncome.length) : 0;
+  return (
+    <Card title="Money in over time" subtitle="Income only, not transfers between your own accounts · click a bar to see those transactions">
+      {total === 0 ? <Empty>No income in these months.</Empty> : (
+        <>
+          <div className="flex flex-wrap gap-x-8 gap-y-1 mb-3 text-xs text-muted">
+            <span>Total <b className="text-good font-semibold text-sm">{formatCents(total)}</b></span>
+            {average > 0 && <span>Average month <b className="text-ink font-semibold text-sm">{formatCents(average)}</b></span>}
+          </div>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={months} margin={{ left: 8, right: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e5ea" vertical={false} />
+                <XAxis dataKey="month" tickFormatter={shortMonth} stroke="#8e8e93" fontSize={11} tickLine={false} axisLine={false} />
+                <YAxis tickFormatter={shortMoney} stroke="#8e8e93" fontSize={11} width={56} tickLine={false} axisLine={false} />
+                <Tooltip cursor={{ fill: 'rgba(0,0,0,0.04)' }} content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null;
+                  const m = payload[0].payload as IncomeMonth;
+                  return (
+                    <div className={`${tooltipClass} min-w-48`}>
+                      <p className="font-semibold text-ink">{monthLabel(m.month)}{!m.complete && <span className="text-warn"> · incomplete</span>}</p>
+                      <p className="text-good font-semibold mb-1">{formatCents(m.cents)}</p>
+                      {m.topSources.map(src => (
+                        <p key={src.name} className="flex justify-between gap-4 text-ink-2">
+                          <span className="truncate max-w-48">{src.name}</span>
+                          <span className="font-mono">{formatCents(src.cents)}</span>
+                        </p>
+                      ))}
+                      {m.otherSources > 0 && <p className="text-muted mt-1">+ {m.otherSources} more</p>}
+                    </div>
+                  );
+                }} />
+                <Bar dataKey="cents" name="Money in" fill={INCOME_GREEN} radius={[4, 4, 0, 0]} cursor="pointer"
+                  onClick={(_, i) => onPick(months[i].month)}>
+                  {months.map(m => <Cell key={m.month} fillOpacity={m.complete ? 1 : 0.35} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </>
+      )}
+    </Card>
   );
 }

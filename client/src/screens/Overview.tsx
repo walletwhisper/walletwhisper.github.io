@@ -105,9 +105,10 @@ export function Overview() {
                   <button className="w-full text-left cursor-pointer group" onClick={() => c.key !== '-1' && goTxns({ cat: c.key })}>
                     <div className="flex items-center justify-between text-sm">
                       <span className="flex items-center gap-2 text-ink group-hover:text-ink"><Dot color={c.color} />{c.name}</span>
-                      <span className={c.diff > 0 ? 'text-warn flex items-center' : 'text-good flex items-center'}>
+                      {/* Green is reserved for money in: spending up is red, spending down stays neutral */}
+                      <span className={`flex items-center gap-0.5 font-medium ${c.diff > 0 ? 'text-bad' : 'text-ink-2'}`}>
                         {c.diff > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
-                        {formatCents(Math.abs(c.diff))}
+                        {formatCents(Math.abs(c.diff))} {c.diff > 0 ? 'more' : 'less'}
                       </span>
                     </div>
                     <div className="text-xs text-muted mt-0.5">{formatCents(c.now)} this month · typical {formatCents(c.typical)}</div>

@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { openDb } from '../src/db.js';
 import { finishImports, importCsvContent } from '../src/importer.js';
-import { getColumnValues, getTransactions, parseFilters } from '../src/reports.js';
+import { getColumnValues, getSummary, getTransactions, getTrends, parseFilters } from '../src/reports.js';
 import type { SortColumn } from '../src/reports.js';
 
 const fixture = (name: string) => fs.readFileSync(path.resolve(__dirname, 'fixtures', name), 'utf8');
@@ -81,5 +81,17 @@ describe('Transactions list: Excel-style column filters', () => {
     expect(f).toMatchObject({ merchants: ['AMAZON', 'SHELL OIL'], categoryIds: [3, 5], personIds: ['none', 2] });
     expect(f.accountIds).toBeUndefined();
     expect(parseFilters({ merchants: 'not json' }).merchants).toBeUndefined();
+  });
+});
+
+describe('Trends: money in', () => {
+  it('I-01: monthly income matches the Money in total and lists where it came from', () => {
+    const t = getTrends(db, {}, 12, 'category');
+    const total = t.income.reduce((s, m) => s + m.cents, 0);
+    expect(total).toBe(getSummary(db, {}).moneyIn);
+    expect(total).toBeGreaterThan(0);
+    const oct = t.income.find(m => m.month === '2026-10')!;
+    expect(oct.topSources[0].cents).toBeGreaterThanOrEqual(oct.topSources.at(-1)!.cents);
+    expect(t.income.map(m => m.month)).toEqual(t.months.map(m => m.month)); // same months as the spending chart
   });
 });

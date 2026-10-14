@@ -78,6 +78,15 @@ export interface Trends {
   stack: 'category' | 'person' | 'account';
   months: { month: string; complete: boolean; totalCents: number; hiddenCents: number; segments: Record<string, number> }[];
   series: { key: string; name: string; color: string; totalCents: number }[];
+  income: IncomeMonth[];
+}
+
+export interface IncomeMonth {
+  month: string;
+  complete: boolean;
+  cents: number;
+  topSources: { name: string; cents: number }[];
+  otherSources: number;
 }
 
 export interface Txn {

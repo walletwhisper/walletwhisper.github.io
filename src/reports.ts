@@ -269,7 +269,25 @@ export function getTrends(db: Db, f: Filters, months: number, stack: StackBy) {
     };
   });
 
-  return { stack, months: data, series };
+  // Money in for the same months: income only (transfers between own accounts are never earnings).
+  // Person/account filters apply; a category filter doesn't, since income has no spending category.
+  const wIn = buildWhere(f, ['from', 'to', 'month', 'categoryId', 'categoryIds']);
+  const incomeRows = db.prepare(`
+    SELECT substr(t.txn_date, 1, 7) AS month, t.merchant AS source, SUM(t.amount_cents) AS cents
+    FROM transactions t WHERE ${wIn.sql} AND t.kind = 'income'
+    GROUP BY month, source`).all(...wIn.params) as { month: string; source: string; cents: number }[];
+  const income = visible.map(month => {
+    const sources = incomeRows.filter(r => r.month === month && r.cents > 0).sort((a, b) => b.cents - a.cents);
+    return {
+      month,
+      complete: completeness.get(month) ?? true,
+      cents: sources.reduce((s, r) => s + r.cents, 0),
+      topSources: sources.slice(0, 4).map(r => ({ name: r.source, cents: r.cents })),
+      otherSources: Math.max(0, sources.length - 4),
+    };
+  });
+
+  return { stack, months: data, series, income };
 }
 
 // ---------- Coverage ----------
