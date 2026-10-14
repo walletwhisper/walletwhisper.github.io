@@ -29,6 +29,11 @@ npm start
 ```
 This starts the local server at `http://127.0.0.1:8000` and automatically opens your browser.
 
+Optional AI categorization: copy `.env.example` to `.env` and add your API key.
+
+### Your data stays on your computer
+Your database (`data/`), backups, bank CSV exports and `.env` (API keys) are all git-ignored and are never committed. The only CSVs in the repo are the made-up samples in `tests/fixtures/`.
+
 ### 2. Run the Automated Tests
 ```bash
 npm test

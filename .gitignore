@@ -1,8 +1,41 @@
+# Dependencies and build output
 node_modules
 dist
-data
+coverage
+
+# ---- Personal and financial data: never commit ----
+# Database, backups and anything the app stores locally
+data/
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+backups/
+
+# Bank exports and statements (any case). Only the synthetic test fixtures are allowed.
 *.csv
+*.CSV
+*.ofx
+*.qfx
+*.qif
+*.xlsx
+*.xls
+*.pdf
 !tests/fixtures/*.csv
-.DS_Store
+!tests/fixtures/*.CSV
+
+# Secrets: API keys live only in .env (copy .env.example)
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
