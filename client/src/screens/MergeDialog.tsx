@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { GitMerge, Replace } from 'lucide-react';
 import { api, sendBackup } from '../api';
+import { reloadWhenSaved } from '../local/engine';
 import type { BackupInfo, MergeConflict, MergePreview } from '../api';
 import { formatCents } from '../lib';
 import { Button, Modal } from '../ui';
@@ -36,7 +37,7 @@ export function MergeDialog({ compareId, preview, info, file, password, onClose 
     try {
       if (mode === 'combine') await api.post('/api/backup/merge', { compareId, choices, removeLocalOnly });
       else await sendBackup('restore', file, password, true);
-      window.location.reload();
+      await reloadWhenSaved();
     } catch (e: any) {
       setError(e.message);
       setBusy(false);
@@ -119,7 +120,7 @@ export function MergeDialog({ compareId, preview, info, file, password, onClose 
           </label>
         )}
 
-        <p className="text-xs text-muted">Either way, a copy of this computer's current data is saved in its backups folder first.</p>
+        <p className="text-xs text-muted">Either way, a copy of the current data is kept first (Settings → Your data → Automatic copies).</p>
         {error && <p className="text-bad">{error}</p>}
 
         <div className="flex justify-end gap-2 pt-3 border-t border-line">

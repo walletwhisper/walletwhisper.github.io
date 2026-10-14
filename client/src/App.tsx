@@ -16,6 +16,8 @@ import { Settings } from './screens/Settings';
 import { Setup } from './screens/Setup';
 import { api } from './api';
 import type { SetupInfo } from './api';
+import { boot } from './local/engine';
+import { SaveBanner } from './SaveStatus';
 import { Segmented } from './ui';
 
 const NAV: { id: Screen; label: string }[] = [
@@ -94,6 +96,7 @@ function Shell() {
         </div>
       </header>
 
+      <SaveBanner />
       {message && (
         <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 mt-4">
           <div className="p-3 bg-surface shadow-card rounded-[10px] text-sm text-ink flex items-center justify-between gap-3 border-l-4 border-accent">
@@ -115,14 +118,14 @@ function Shell() {
 
       <footer className="text-center text-xs text-muted pb-8 px-4">
         <Lock className="w-3 h-3 inline -mt-0.5 mr-1" />
-        Your statements and spending stay on this computer. Nothing is uploaded.{' '}
+        Your statements and spending stay in this browser, on this computer. Nothing is uploaded.{' '}
         <button onClick={() => navigate('about')} className="text-accent hover:underline cursor-pointer">How your data is stored</button>
       </footer>
 
       {dragging && (
         <div className="fixed inset-0 z-50 bg-white/80 backdrop-blur-sm border-4 border-dashed border-accent flex flex-col items-center justify-center gap-2 pointer-events-none">
           <p className="text-2xl font-bold tracking-tight text-ink">Drop bank CSV files to import</p>
-          <p className="text-sm text-muted">They're read on this computer and never uploaded anywhere.</p>
+          <p className="text-sm text-muted">They're read in this browser and never uploaded anywhere.</p>
         </div>
       )}
       {files && <ImportDialog files={files} onClose={() => setFiles(null)} />}
@@ -144,19 +147,27 @@ function Logo() {
 
 export function App() {
   const [setup, setSetup] = useState<SetupInfo | null>(null);
+  const [elsewhere, setElsewhere] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    api.get<SetupInfo>('/api/setup').then(setSetup).catch(e => setError(e.message));
+    boot()
+      .then(r => (r.status === 'open-elsewhere' ? setElsewhere(true) : api.get<SetupInfo>('/api/setup').then(setSetup)))
+      .catch(e => setError(e.message));
   }, []);
 
-  if (error) return <div className="min-h-screen bg-page flex items-center justify-center text-sm text-bad p-4">Can't reach WalletWhisper: {error}</div>;
+  if (elsewhere) return <Notice>WalletWhisper is already open in another tab. Use that tab, or close it and reload this one.</Notice>;
+  if (error) return <Notice>WalletWhisper couldn't start: {error}</Notice>;
   if (!setup) return <div className="min-h-screen bg-page" />;
-  if (!setup.configured) return <Setup suggestedFolder={setup.suggestedFolder} onDone={() => setSetup({ ...setup, configured: true })} />;
+  if (!setup.configured) return <Setup onDone={() => setSetup({ configured: true })} />;
   return (
     <StoreProvider>
       <Shell />
     </StoreProvider>
   );
+}
+
+function Notice({ children }: { children: React.ReactNode }) {
+  return <div className="min-h-screen bg-page flex items-center justify-center text-sm text-ink-2 p-4 text-center">{children}</div>;
 }
 
 export default App;

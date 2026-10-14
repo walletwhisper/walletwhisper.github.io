@@ -1,33 +1,26 @@
 {
   "name": "walletwhisper",
   "version": "1.0.0",
-  "description": "Private, local-first household spending tracker for bank CSV statements",
+  "description": "Private household spending tracker for bank CSV statements. Runs entirely in your browser.",
   "type": "module",
   "scripts": {
-    "start": "tsx run.js",
-    "prestart": "npm run build:client",
+    "start": "npm run build && npm --prefix client run preview -- --port 8000 --strictPort --open",
+    "build": "npm --prefix client run build",
+    "dev": "npm --prefix client run dev",
     "postinstall": "npm --prefix client install",
-    "dev:server": "tsx watch src/server.ts",
-    "dev:client": "npm --prefix client run dev",
-    "build:client": "npm --prefix client run build",
     "test": "vitest run",
     "prepare": "git config core.hooksPath .githooks || true",
     "privacy-check": "node scripts/privacy-check.mjs --all"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
-    "better-sqlite3": "^13.0.3",
+    "@noble/hashes": "2.4.0",
     "csv-parse": "^7.0.3",
-    "express": "^5.3.0",
-    "multer": "^2.4.0"
+    "sql.js": "1.14.2"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0",
-    "@types/express": "^5.0.6",
-    "@types/multer": "^2.3.0",
     "@types/node": "^26.6.5",
-    "@types/supertest": "^7.2.1",
-    "supertest": "^7.3.1",
+    "@types/sql.js": "1.4.11",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
@@ -36,7 +29,6 @@
     "node": ">=20"
   },
   "allowScripts": {
-    "better-sqlite3@13.0.3": true,
     "esbuild@0.28.2": true
   }
 }

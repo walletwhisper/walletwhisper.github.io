@@ -9,14 +9,15 @@
  * Checks:
  *   1. Forbidden files: databases, backups, .env, bank exports (CSV/OFX/QFX/XLSX/PDF) outside tests/fixtures.
  *   2. Secrets: API key formats, private keys, and the literal values in your local .env.
- *   3. Your own identifiers, read automatically from your local database (account last-4 digits,
- *      people names and aliases) plus any extra terms you list in .privacy-blocklist (git-ignored).
+ *   3. Your own identifiers: account last-4 digits and people names/aliases, read from any WalletWhisper
+ *      database file in data/ (and remembered in .privacy-blocklist, so they stay blocked after that
+ *      file is gone; the app itself now keeps data in the browser), plus any extra terms you list in
+ *      .privacy-blocklist (git-ignored).
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { createRequire } from 'node:module';
 
 const ROOT = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
 const ZERO = /^0+$/;
@@ -76,27 +77,61 @@ function localSecrets() {
   return out;
 }
 
+const BLOCKLIST = () => path.join(ROOT, '.privacy-blocklist');
+
+/** Node's built-in SQLite (Node 22.5+), without its "experimental" notice; null if unavailable. */
+function builtinSqlite() {
+  const emit = process.emitWarning;
+  try {
+    process.emitWarning = () => {};
+    return process.getBuiltinModule?.('node:sqlite') ?? null;
+  } catch {
+    return null;
+  } finally {
+    process.emitWarning = emit;
+  }
+}
+
+/** Account endings and people names from WalletWhisper database files on this computer. */
+function termsFromDatabases() {
+  const folders = [path.join(ROOT, 'data'), appSettings().dataFolder].filter(Boolean);
+  const files = [...new Set(folders.flatMap(dir => {
+    try { return fs.readdirSync(dir).filter(f => /\.db$/i.test(f)).map(f => path.join(dir, f)); } catch { return []; }
+  }))];
+  const sqlite = files.length ? builtinSqlite() : null;
+  if (!sqlite) return [];
+  const out = [];
+  for (const file of files) {
+    let db;
+    try {
+      db = new sqlite.DatabaseSync(file, { readOnly: true });
+      for (const r of db.prepare("SELECT last4 FROM accounts WHERE last4 IS NOT NULL AND last4 != ''").all()) out.push(String(r.last4));
+      for (const r of db.prepare('SELECT name, aliases FROM people').all()) {
+        out.push(String(r.name));
+        for (const a of JSON.parse(r.aliases || '[]')) out.push(String(a));
+      }
+    } catch { /* not a WalletWhisper database */ } finally {
+      try { db?.close(); } catch { /* ignore */ }
+    }
+  }
+  return out.map(t => t.trim()).filter(t => t.length >= 3);
+}
+
+/** Remember terms found in a database in .privacy-blocklist, so they stay blocked once the file is gone. */
+function remember(found) {
+  let existing = '';
+  try { existing = fs.readFileSync(BLOCKLIST(), 'utf8'); } catch { /* new file */ }
+  const known = new Set(existing.split(/\r?\n/).map(l => l.trim().toLowerCase()));
+  const fresh = [...new Set(found)].filter(t => !known.has(t.toLowerCase()));
+  if (fresh.length === 0) return;
+  const header = existing.includes('# Added automatically') ? '' : '\n# Added automatically from your WalletWhisper data (account endings, people)\n';
+  const before = existing && !existing.endsWith('\n') ? existing + '\n' : existing;
+  fs.writeFileSync(BLOCKLIST(), before + header + fresh.join('\n') + '\n');
+}
+
 function personalTerms() {
   const terms = [];
-  // From the local database: account last-4s, people names and aliases
-  try {
-    const require = createRequire(path.join(ROOT, 'package.json'));
-    const Database = require('better-sqlite3');
-    const dbFile = path.join(appSettings().dataFolder || path.join(ROOT, 'data'), 'app.db');
-    if (fs.existsSync(dbFile)) {
-      const db = new Database(dbFile, { readonly: true, fileMustExist: true });
-      try {
-        for (const r of db.prepare("SELECT last4 FROM accounts WHERE last4 IS NOT NULL AND last4 != ''").all()) {
-          terms.push({ term: r.last4, label: 'account number ending', digits: true });
-        }
-        for (const r of db.prepare('SELECT name, aliases FROM people').all()) {
-          terms.push({ term: r.name, label: 'household member name' });
-          for (const a of JSON.parse(r.aliases || '[]')) terms.push({ term: a, label: 'household member alias' });
-        }
-      } catch { /* older schema */ }
-      db.close();
-    }
-  } catch { /* better-sqlite3 not installed (e.g. CI) */ }
+  try { remember(termsFromDatabases()); } catch { /* the blocklist below still applies */ }
   // Extra terms, one per line (git-ignored): names, addresses, account numbers, employer...
   try {
     const list = fs.readFileSync(path.join(ROOT, '.privacy-blocklist'), 'utf8');

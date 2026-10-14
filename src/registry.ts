@@ -1,4 +1,4 @@
-import { BankProfile } from './types.js';
+import type { BankProfile } from './types.js';
 import { chaseCreditProfile } from './profiles/chaseCredit.js';
 import { chaseCheckingProfile } from './profiles/chaseChecking.js';
 

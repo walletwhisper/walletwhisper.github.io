@@ -4,7 +4,7 @@ import { useRoute } from '../lib';
 
 const STEPS = [
   { color: '#005594', label: 'Download CSVs from your bank', desc: 'Export statements from each bank website, the same way you always do.' },
-  { color: '#4398D3', label: 'Drop them into WalletWhisper', desc: 'Files are read by the program running on this computer. Nothing is uploaded to a server.' },
+  { color: '#4398D3', label: 'Drop them into WalletWhisper', desc: 'Files are read inside your browser, on this computer. Nothing is uploaded to a server.' },
   { color: '#EE8D3D', label: 'Answer a few questions', desc: 'Tell it which payments move money between your own accounts, so every dollar is counted once.' },
   { color: '#C5362F', label: 'See where the money goes', desc: 'Monthly overview, trends, and who spent what, by person and by account.' },
 ];
@@ -45,7 +45,7 @@ export function About() {
             <Feature color="#EE8D3D" icon={<BarChart3 />} title="See it visually" desc="Monthly overview, category donut, and trends that flag incomplete months" />
             <Feature color="#5856D6" icon={<Users />} title="Who spent what" desc="Mark each transaction with a person; set a default person per account" />
             <Feature color="#34C759" icon={<Sparkles />} title="Ask in plain English" desc="Optional: with your own AI key, ask things like &quot;dining last month?&quot; and see how it compares" />
-            <Feature color="#C5362F" icon={<Lock />} title="100% private" desc="No accounts, no cloud, no tracking. Your data stays in a folder on this computer" />
+            <Feature color="#C5362F" icon={<Lock />} title="100% private" desc="No accounts, no server, no tracking. Your data stays in this browser on this computer" />
           </div>
         </div>
       </div>
@@ -76,20 +76,22 @@ function PrivacyPanel() {
         <div className="flex-1">
           <h3 className="text-lg font-bold tracking-tight text-ink">Your data stays on this computer</h3>
           <p className="text-sm text-ink-2 mt-1 leading-relaxed">
-            WalletWhisper is a program that runs on your own computer. There is no WalletWhisper server, no sign-up and no tracking.
+            WalletWhisper runs entirely inside your web browser. There is no WalletWhisper server, no sign-up and no tracking:
+            the website only delivers the app, and it never receives your data.
           </p>
 
           <ul className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 text-sm">
-            <Fact icon={<HardDrive />} title="Saved in a folder you chose">
-              Your transactions, people and choices, plus automatic backups, are kept in your data folder.
-              See or change it in{' '}
+            <Fact icon={<HardDrive />} title="Saved in this browser">
+              Your transactions, people and choices, plus automatic copies, are kept in this browser's private storage on this computer.
+              Back them up, or keep a copy in a folder, in{' '}
               <button className="text-accent hover:underline cursor-pointer" onClick={() => navigate('settings')}>Settings</button>.
             </Fact>
             <Fact icon={<Lock />} title="Only you can open it">
-              The app only accepts connections from this computer, so other devices and websites can't read your data.
+              Browsers keep each website's storage private, so other websites can't read it. It isn't synced to other devices.
             </Fact>
             <Fact icon={<ShieldCheck />} title="Nothing is uploaded">
-              Bank files are read on this computer. Downloading WalletWhisper from GitHub gives you only the program, never anyone's data.
+              Bank files are read inside the browser. A security rule built into the page stops it from sending anything anywhere,
+              except to the AI provider you choose, and only when you use AI.
             </Fact>
             <Fact icon={<Sparkles />} title="AI is optional">
               It's off unless you add your own AI key. Asking a question sends only your words; the answer is worked out

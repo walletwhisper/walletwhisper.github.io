@@ -30,6 +30,15 @@ describe('Ask: answers are computed locally from the plan', () => {
     expect(a.months).toHaveLength(13);
     expect(a.months[12]).toMatchObject({ month: '2026-10', cents: 2500, inPeriod: true });
     expect(a.headline).toContain('$25.00');
+    expect(a.headline).toContain("There's no spending recorded for September 2026 or October 2025 to compare with.");
+    expect(a.headline).not.toMatch(/That's there/);
+  });
+
+  it('Q-04: this month so far is compared with the same days of last month', () => {
+    const a = answerQuestion(loadedDb(), plan({ from: '2026-10-01', to: '2026-10-14' }));
+    if (!a.understood) throw new Error('expected an answer');
+    expect(a.previous).toMatchObject({ from: '2026-09-01', to: '2026-09-14' });
+    expect(a.lastYear).toMatchObject({ from: '2025-10-01', to: '2025-10-14' });
   });
 
   it('Q-02: a category question only counts that category, and transactions hidden from charts are left out', () => {

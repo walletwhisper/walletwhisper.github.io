@@ -14,6 +14,8 @@ const KIND_TABS = [
   { id: 'all', label: 'All' },
 ];
 
+const PAGE_ROWS = 200;
+
 type SortColumn = 'date' | 'merchant' | 'account' | 'person' | 'category' | 'amount';
 /** First click: newest / largest first for date and amount, A→Z for names (same as the server). */
 const DEFAULT_DIR: Record<SortColumn, 'asc' | 'desc'> = {
@@ -91,6 +93,10 @@ export function Transactions() {
   const [aiBusy, setAiBusy] = useState(false);
 
   const rows = data?.transactions ?? [];
+  // Draw the table in pages, so thousands of rows don't freeze the screen
+  const [shown, setShown] = useState(PAGE_ROWS);
+  useEffect(() => setShown(PAGE_ROWS), [data]);
+  const visible = rows.length > shown ? rows.slice(0, shown) : rows;
   const allSelected = rows.length > 0 && rows.every(r => selected.has(r.id));
   const selectedSum = useMemo(() => rows.filter(r => selected.has(r.id)).reduce((a, r) => a + r.amountCents, 0), [rows, selected]);
 
@@ -234,7 +240,7 @@ export function Transactions() {
             <thead className="bg-page text-muted uppercase tracking-wider border-b border-line">
               <tr>
                 <th className="pl-4 pr-1 py-3 w-8">
-                  <input type="checkbox" aria-label="Select all shown" title="Select every transaction shown (use the column filters first to narrow it down)" checked={allSelected}
+                  <input type="checkbox" aria-label="Select all shown" title="Select every matching transaction (use the column filters first to narrow it down)" checked={allSelected}
                     onChange={() => setSelected(allSelected ? new Set() : new Set(rows.map(r => r.id)))} />
                 </th>
                 {header('date', 'Date')}
@@ -247,7 +253,7 @@ export function Transactions() {
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
-              {rows.map(t => (
+              {visible.map(t => (
                 <tr key={t.id} className={`hover:bg-fill/60 ${selected.has(t.id) ? 'bg-accent/5' : ''} ${t.hidden ? 'text-muted' : ''}`}>
                   <td className="pl-4 pr-1 py-2.5">
                     <input type="checkbox" aria-label={`Select ${t.merchant}`} checked={selected.has(t.id)} onChange={() => {
@@ -302,6 +308,13 @@ export function Transactions() {
             </tbody>
           </table>
           {data && rows.length === 0 && <Empty>No matching transactions.</Empty>}
+          {rows.length > shown && (
+            <div className="border-t border-line px-4 py-3 flex items-center justify-center gap-3 text-xs text-muted">
+              Showing {shown} of {rows.length}
+              <Button onClick={() => setShown(shown + PAGE_ROWS)}>Show {Math.min(PAGE_ROWS, rows.length - shown)} more</Button>
+              <Button variant="ghost" onClick={() => setShown(rows.length)}>Show all</Button>
+            </div>
+          )}
         </div>
         {data && (
           <div className="border-t border-line px-4 py-3 flex justify-between text-xs text-muted">

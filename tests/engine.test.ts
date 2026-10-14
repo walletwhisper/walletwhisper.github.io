@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import Database from 'better-sqlite3';
+import { Db as Database } from '../src/sqlite.js';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { openDb, type Db } from '../src/db.js';
 import { bankRegistry } from '../src/registry.js';
@@ -265,7 +264,7 @@ describe('Counting every dollar once', () => {
 describe('Categories, people, and decisions', () => {
   let db: Db;
   beforeEach(() => { db = openDb(':memory:'); });
-  afterEach(() => { vi.unstubAllGlobals(); delete process.env.LLM_API_KEY; });
+  afterEach(() => { vi.unstubAllGlobals(); });
 
   it('C-02: user rule beats default rule beats bank category', () => {
     load(db, CREDIT);
@@ -289,7 +288,7 @@ describe('Categories, people, and decisions', () => {
 
   it('C-04: the AI only changes spending categories, never kind, and never sees transfers', async () => {
     load(db, CREDIT, CHECKING);
-    process.env.LLM_API_KEY = 'AIza' + 'x'.repeat(35); // fake Gemini-format key; fetch is stubbed below
+    const fakeKey = 'AIza' + 'x'.repeat(35); // fake Gemini-format key; fetch is stubbed below
     const sent: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: any) => {
       const prompt = JSON.parse(init.body).contents[0].parts[0].text as string;
@@ -298,7 +297,7 @@ describe('Categories, people, and decisions', () => {
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(items.map((i: any) => ({ id: i.id, category: 'Dining' }))) }] } }] }));
     }));
     const kindsBefore = db.prepare('SELECT id, kind FROM transactions ORDER BY id').all();
-    await recategorizeWithLlm(db);
+    await recategorizeWithLlm(db, fakeKey);
     expect(db.prepare('SELECT id, kind FROM transactions ORDER BY id').all()).toEqual(kindsBefore);
     expect(sent.join()).not.toMatch(/Payment to Chase card|Payment Thank You|PAYROLL|Advantage Savings/);
     expect(sent.join()).not.toMatch(/Allowed categories:.*\bTransfer\b/);
@@ -335,10 +334,8 @@ describe('Categories, people, and decisions', () => {
 });
 
 describe('Migrating a v0.1 database', () => {
-  it('M-01: upgrades in place, backfills direction, keeps manual edits, and takes a backup', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'spend-'));
-    const file = path.join(dir, 'app.db');
-    const old = new Database(file);
+  it('M-01: upgrades in place, backfills direction, keeps manual edits, and offers a backup first', () => {
+    const old = new Database();
     old.exec(`
       CREATE TABLE accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, profile_id TEXT NOT NULL, bank TEXT NOT NULL, account_type TEXT NOT NULL, nickname TEXT);
       CREATE TABLE imports (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER NOT NULL, filename TEXT NOT NULL, imported_at TEXT NOT NULL, rows_added INTEGER NOT NULL, rows_skipped INTEGER NOT NULL);
@@ -352,18 +349,16 @@ describe('Migrating a v0.1 database', () => {
         VALUES (1, 1, '2026-10-01', 'Online Transfer from Savings', 'Savings', 50000, 'transfer', 2, 'default_rule', 'fp1'),
                (1, 1, '2026-10-02', 'Cafe', 'Cafe', 500, 'spend', 1, 'manual', 'fp2');
     `);
+    const file = old.export();
     old.close();
 
-    const backups = path.join(dir, 'backups');
-    process.env.SPENDING_BACKUP_DIR = backups;
-    const db = openDb(file);
+    const backedUp: number[] = [];
+    const db = openDb(file, from => backedUp.push(from));
     expect(db.pragma('user_version', { simple: true })).toBe(2);
     expect(db.prepare("SELECT direction, bank_kind FROM transactions WHERE fingerprint = 'fp1'").get()).toEqual({ direction: 'in', bank_kind: 'transfer' });
     expect(db.prepare("SELECT category_id FROM decisions WHERE fingerprint = 'fp2'").get()).toEqual({ category_id: 1 });
     expect(db.prepare("SELECT COUNT(*) AS n FROM categories WHERE name = 'Credit card (untracked)'").get()).toEqual({ n: 1 });
-    expect(fs.readdirSync(backups).filter(f => f.startsWith('pre-migration'))).toHaveLength(1);
-    delete process.env.SPENDING_BACKUP_DIR;
+    expect(backedUp).toEqual([1]);
     db.close();
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

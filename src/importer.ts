@@ -1,10 +1,12 @@
-import { parse } from 'csv-parse/sync';
-import crypto from 'crypto';
+import { parse } from 'csv-parse/browser/esm/sync';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 import type { Db } from './db.js';
 import { bankRegistry } from './registry.js';
 import { cleanMerchant } from './cleaner.js';
 import { createClassifier } from './classifier.js';
-import { applyDecisions, recompute, RecomputeStats } from './ledger.js';
+import { applyDecisions, recompute } from './ledger.js';
+import type { RecomputeStats } from './ledger.js';
 import type { BankProfile, ParsedRow } from './types.js';
 import { UserError } from './errors.js';
 
@@ -89,7 +91,7 @@ function fingerprints(accountId: number, rows: ParsedRow[]): string[] {
     const base = `${accountId}|${r.date}|${r.rawDescription}|${r.amountCents}`;
     const occ = (seen.get(base) || 0) + 1;
     seen.set(base, occ);
-    return crypto.createHash('sha256').update(`${base}|${occ}`).digest('hex');
+    return bytesToHex(sha256(utf8ToBytes(`${base}|${occ}`)));
   });
 }
 

@@ -46,8 +46,14 @@ function labelFor(from: string, to: string): string {
     : `${short(f)}, ${f.getUTCFullYear()} – ${short(t)}, ${t.getUTCFullYear()}`;
 }
 
-/** The period just before, of the same length (whole months stay whole months). */
+/** The period just before, of the same length (whole months stay whole months, and this month so far
+ *  compares with the same days of last month). */
 function previousPeriod(p: Period): Period {
+  if (p.from.endsWith('-01') && p.from.slice(0, 7) === p.to.slice(0, 7) && !wholeMonths(p)) {
+    const from = addMonths(p.from, -1);
+    const to = addMonths(p.to, -1);
+    return { from, to, label: labelFor(from, to) };
+  }
   const n = wholeMonths(p);
   if (n) {
     const from = addMonths(p.from, -n);
@@ -85,8 +91,17 @@ export interface AskAnswer {
 
 const usd = (cents: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
+/** "That's $12 more than September 2026." Periods with nothing recorded are named, not compared. */
+function comparisons(now: number, periods: PeriodTotal[]): string {
+  const withData = periods.filter(p => p.count > 0).map(p => compare(now, p));
+  const empty = periods.filter(p => p.count === 0).map(p => p.label);
+  const parts: string[] = [];
+  if (withData.length) parts.push(`That's ${withData.join(', and ')}.`);
+  if (empty.length) parts.push(`There's no spending recorded for ${empty.join(' or ')} to compare with.`);
+  return parts.join(' ');
+}
+
 function compare(now: number, then: PeriodTotal): string {
-  if (then.count === 0) return `there's no spending recorded for ${then.label}`;
   const diff = now - then.cents;
   if (Math.abs(diff) < 100) return `about the same as ${then.label}`;
   const pct = then.cents > 0 ? ` (${Math.round(Math.abs(diff) / then.cents * 100)}%)` : '';
@@ -167,7 +182,7 @@ export function answerQuestion(db: Db, plan: QuestionPlan): AskAnswer | { unders
   const headline = period.count === 0
     ? `No spending ${subject === 'in total' ? '' : subject + ' '}found for ${period.label}.`
     : `${who} ${usd(period.cents)} ${subject} in ${period.label}, across ${period.count} transaction${period.count === 1 ? '' : 's'}. ` +
-      `That's ${compare(period.cents, previous)}, and ${compare(period.cents, lastYear)}.`;
+      comparisons(period.cents, [previous, lastYear]);
 
   return {
     understood: true,

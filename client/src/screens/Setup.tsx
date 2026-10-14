@@ -1,53 +1,67 @@
 import { useRef, useState } from 'react';
-import { FolderLock, Laptop } from 'lucide-react';
+import { FileUp, FolderOpen, Lock, Sparkles } from 'lucide-react';
 import { api, sendBackup } from '../api';
 import type { BackupInfo } from '../api';
+import { reloadWhenSaved, saveNow } from '../local/engine';
+import { chooseFolder, folderSupported, linkFolder, readFolderFile } from '../local/folder';
 import { inputClass } from '../ui';
+import { markBackedUp } from '../SaveStatus';
 
 /**
- * First run: the user chooses the folder on this computer where WalletWhisper keeps its data,
- * and can start from a backup file made on another computer instead of importing everything again.
+ * First visit in this browser: start fresh, bring data from a backup file, or (Chrome/Edge) use a
+ * folder on this computer that also keeps a copy of the data.
  */
-export function Setup({ suggestedFolder, onDone }: { suggestedFolder: string; onDone: () => void }) {
-  const [folder, setFolder] = useState(suggestedFolder);
+export function Setup({ onDone }: { onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
   const fileInput = useRef<HTMLInputElement>(null);
-  const [restoring, setRestoring] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [password, setPassword] = useState('');
   const [needsPassword, setNeedsPassword] = useState(false);
   const [info, setInfo] = useState<BackupInfo | null>(null);
+  const [pendingFolder, setPendingFolder] = useState<FileSystemDirectoryHandle | null>(null);
 
-  const inspect = async (f: File, pw: string) => {
-    setError(null);
-    try {
-      const r = await sendBackup<{ needsPassword: boolean; info?: BackupInfo }>('inspect', f, pw);
-      setNeedsPassword(r.needsPassword);
-      setInfo(r.info ?? null);
-    } catch (e: any) { setError(e.message); setInfo(null); }
-  };
-
-  const start = async () => {
+  const guard = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError(null);
-    try {
-      await api.post('/api/setup', { folder });
-      if (restoring && file && info) {
-        await sendBackup('restore', file, password);
-        window.location.reload();
-        return;
-      }
-      onDone();
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
+    try { await fn(); } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
 
-  const waitingForBackup = restoring && !info;
+  const startFresh = () => guard(async () => {
+    await api.post('/api/setup');
+    await saveNow();
+    onDone();
+  });
+
+  const inspect = (f: File, pw: string) => guard(async () => {
+    const r = await sendBackup<{ needsPassword: boolean; info?: BackupInfo }>('inspect', f, pw);
+    setNeedsPassword(r.needsPassword);
+    setInfo(r.info ?? null);
+  });
+
+  const pickFile = (f: File, folder: FileSystemDirectoryHandle | null = null) => {
+    setFile(f); setInfo(null); setPassword(''); setNeedsPassword(false); setPendingFolder(folder);
+    inspect(f, '');
+  };
+
+  const restore = () => guard(async () => {
+    if (!file) return;
+    await sendBackup('restore', file, password);
+    await markBackedUp(); // they have this backup file
+    if (pendingFolder) await linkFolder(pendingFolder);
+    await reloadWhenSaved();
+  });
+
+  const useFolder = () => guard(async () => {
+    const dir = await chooseFolder();
+    if (!dir) return;
+    const existing = await readFolderFile(dir);
+    if (existing) { pickFile(existing, dir); return; } // data from before: open it
+    await linkFolder(dir);
+    await api.post('/api/setup');
+    await saveNow(); // writes the first copy into the folder
+    onDone();
+  });
 
   return (
     <div className="min-h-screen bg-page font-sans flex items-center justify-center p-4">
@@ -56,72 +70,77 @@ export function Setup({ suggestedFolder, onDone }: { suggestedFolder: string; on
           Welcome to Wallet<span className="text-accent">Whisper</span>
         </h1>
         <p className="text-[15px] text-ink-2 mt-2 leading-relaxed">
-          Your bank statements and spending are saved on this computer, in a folder you choose. Nothing is uploaded.
+          See where your household's money goes, from the CSV statements your banks give you.
         </p>
-
-        <div className="mt-6 flex gap-3 items-start">
-          <div className="w-10 h-10 min-w-10 rounded-full bg-accent/10 text-accent flex items-center justify-center">
-            <FolderLock className="w-5 h-5" />
-          </div>
-          <label className="flex-1 block">
-            <span className="text-sm font-semibold text-ink">Where should WalletWhisper keep your data?</span>
-            <input value={folder} onChange={e => setFolder(e.target.value)} spellCheck={false}
-              className={`${inputClass} w-full mt-2 !text-sm !py-2`} />
-            <span className="block text-xs text-muted mt-1.5">
-              The suggested folder is fine for most people. Backups are kept inside it, and you can move it later in Settings.
-            </span>
-          </label>
+        <div className="mt-4 flex gap-3 rounded-[10px] bg-good/10 p-3 text-[13px] text-ink-2 leading-relaxed">
+          <Lock className="w-4 h-4 min-w-4 mt-0.5 text-good" />
+          <span>
+            <b className="text-ink">Your data stays on this computer.</b> WalletWhisper runs entirely in this browser and has no server:
+            your statements are read here and saved here, in this browser's private storage. Nothing is uploaded.
+          </span>
         </div>
 
-        <div className="mt-5 flex gap-3 items-start">
-          <div className="w-10 h-10 min-w-10 rounded-full bg-accent/10 text-accent flex items-center justify-center">
-            <Laptop className="w-5 h-5" />
-          </div>
-          <div className="flex-1 text-sm">
-            <label className="flex items-center gap-2 font-semibold text-ink cursor-pointer">
-              <input type="checkbox" checked={restoring} onChange={e => { setRestoring(e.target.checked); setError(null); }} />
-              Moving from another computer? Start from a backup file
-            </label>
-            {restoring && (
-              <div className="mt-2 space-y-2 text-xs">
-                <input ref={fileInput} type="file" accept=".wwbackup,.db" className="hidden"
-                  onChange={e => {
-                    const f = e.target.files?.[0];
-                    e.target.value = '';
-                    if (f) { setFile(f); setInfo(null); setPassword(''); setNeedsPassword(false); inspect(f, ''); }
-                  }} />
-                <p className="text-muted">
-                  On the other computer, use <b>Settings → Move to another computer → Download backup file</b>, then choose that file here.
-                </p>
-                <button onClick={() => fileInput.current?.click()} className="text-accent hover:underline cursor-pointer">
-                  {file ? `${file.name} (choose another)` : 'Choose backup file…'}
-                </button>
-                {needsPassword && !info && (
-                  <div className="flex gap-2">
-                    <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Backup password"
-                      onKeyDown={e => { if (e.key === 'Enter' && file && password) inspect(file, password); }}
-                      className={`${inputClass} flex-1`} />
-                    <button onClick={() => file && inspect(file, password)} disabled={!password}
-                      className="text-accent font-medium cursor-pointer disabled:opacity-40">Unlock</button>
-                  </div>
-                )}
-                {info && (
-                  <p className="text-ink-2">
-                    Ready: {info.transactions.toLocaleString()} transactions{info.from && <> ({info.from} to {info.to})</>}, {info.accounts} accounts, {info.people} people.
-                  </p>
-                )}
-              </div>
+        {!file ? (
+          <div className="mt-6 space-y-3">
+            <button onClick={startFresh} disabled={busy}
+              className="w-full bg-accent hover:bg-accent-hover text-white rounded-full py-2.5 font-semibold text-sm cursor-pointer shadow-soft disabled:opacity-40 flex items-center justify-center gap-2">
+              <Sparkles className="w-4 h-4" /> {busy ? 'Setting up…' : 'Start'}
+            </button>
+            <input ref={fileInput} type="file" accept=".wwbackup,.db" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) pickFile(f); }} />
+            <Choice icon={<FileUp className="w-4 h-4" />} onClick={() => fileInput.current?.click()} disabled={busy}
+              title="I have a backup file"
+              desc="Made with Settings → Download backup file, on another computer or browser." />
+            {folderSupported() && (
+              <Choice icon={<FolderOpen className="w-4 h-4" />} onClick={useFolder} disabled={busy}
+                title="Also keep my data in a folder"
+                desc="Choose a folder on this computer. WalletWhisper saves a copy there after every change, and opens it if it's already there." />
             )}
           </div>
-        </div>
+        ) : (
+          <div className="mt-6 space-y-3 text-sm">
+            <p className="text-ink-2 break-all">
+              <b className="text-ink">{file.name}</b> · <button className="text-accent hover:underline cursor-pointer" onClick={() => setFile(null)}>back</button>
+            </p>
+            {needsPassword && !info && (
+              <div className="flex gap-2">
+                <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Backup password" autoFocus
+                  onKeyDown={e => { if (e.key === 'Enter' && password) inspect(file, password); }}
+                  className={`${inputClass} flex-1 !text-sm !py-2`} />
+                <button onClick={() => inspect(file, password)} disabled={!password || busy}
+                  className="text-accent font-medium cursor-pointer disabled:opacity-40">Unlock</button>
+              </div>
+            )}
+            {info && (
+              <>
+                <p className="text-ink-2">
+                  Ready: {info.transactions.toLocaleString()} transactions{info.from && <> ({info.from} to {info.to})</>}, {info.accounts} accounts, {info.people} people.
+                </p>
+                <button onClick={restore} disabled={busy}
+                  className="w-full bg-accent hover:bg-accent-hover text-white rounded-full py-2.5 font-semibold text-sm cursor-pointer shadow-soft disabled:opacity-40">
+                  {busy ? 'Opening…' : 'Start with this data'}
+                </button>
+              </>
+            )}
+            {busy && !info && <p className="text-xs text-muted">Checking the file…</p>}
+          </div>
+        )}
 
         {error && <p className="mt-4 text-sm text-bad">{error}</p>}
-
-        <button onClick={start} disabled={busy || !folder.trim() || waitingForBackup}
-          className="mt-6 w-full bg-accent hover:bg-accent-hover text-white rounded-full py-2.5 font-semibold text-sm cursor-pointer shadow-soft disabled:opacity-40">
-          {busy ? 'Setting up…' : restoring && info ? 'Start with my backup' : 'Start'}
-        </button>
       </div>
     </div>
+  );
+}
+
+function Choice({ icon, title, desc, onClick, disabled }: { icon: React.ReactNode; title: string; desc: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button onClick={onClick} disabled={disabled}
+      className="w-full text-left flex gap-3 rounded-[10px] border border-line p-3 hover:border-accent/50 hover:bg-accent/5 cursor-pointer transition disabled:opacity-40">
+      <span className="w-8 h-8 min-w-8 rounded-full bg-accent/10 text-accent flex items-center justify-center">{icon}</span>
+      <span>
+        <span className="block text-sm font-semibold text-ink">{title}</span>
+        <span className="block text-xs text-muted mt-0.5">{desc}</span>
+      </span>
+    </button>
   );
 }

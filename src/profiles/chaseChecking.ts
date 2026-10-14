@@ -1,4 +1,4 @@
-import { BankProfile, ParsedRow } from '../types.js';
+import type { BankProfile, ParsedRow } from '../types.js';
 import { chaseLast4, field, parseAmount, parseUsDate, toCents } from './common.js';
 
 /**

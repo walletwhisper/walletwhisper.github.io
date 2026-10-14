@@ -1,13 +1,13 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import request from 'supertest';
-import Database from 'better-sqlite3';
+import { describe, it, expect } from 'vitest';
+import nodeCrypto from 'crypto';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
-import { openDb, resetDbInstance } from '../src/db.js';
+import { openDb } from '../src/db.js';
+import { Db } from '../src/sqlite.js';
 import { finishImports, importCsvContent } from '../src/importer.js';
-import { createBackup, isEncryptedBackup, prepareRestore } from '../src/backup.js';
-import { createServer } from '../src/server.js';
+import { createBackup, isEncryptedBackup, readBackup } from '../src/backup.js';
+import { LocalApi } from '../src/app.js';
+import { client, fixtureFile, memoryHost } from './helpers.js';
 
 const fixture = (name: string) => fs.readFileSync(path.resolve(__dirname, 'fixtures', name), 'utf8');
 const CREDIT = 'Chase1234_Activity_20261031.CSV';
@@ -19,123 +19,130 @@ function loadedDb() {
   finishImports(db);
   return db;
 }
-const count = (db: Database.Database) => (db.prepare('SELECT COUNT(*) AS n FROM transactions').get() as { n: number }).n;
+const count = (db: Db) => (db.prepare('SELECT COUNT(*) AS n FROM transactions').get() as { n: number }).n;
+const has = (data: Uint8Array, text: string) => Buffer.from(data).includes(Buffer.from(text));
 
 describe('Backup files', () => {
-  it('B-01: a backup restores to the same data', () => {
+  it('B-01: a backup restores to the same data', async () => {
     const db = loadedDb();
-    const file = createBackup(db);
+    const file = await createBackup(db);
     expect(isEncryptedBackup(file)).toBe(false);
-    const { tmpPath, info } = prepareRestore(file);
-    const restored = new Database(tmpPath, { readonly: true });
+    const { data, info } = await readBackup(file);
+    const restored = openDb(data);
     expect(count(restored)).toBe(count(db));
     expect(info.transactions).toBe(count(db));
-    restored.close();
-    fs.rmSync(tmpPath);
   });
 
-  it('B-02: a password-protected backup is encrypted and needs the right password', () => {
+  it('B-02: a password-protected backup is encrypted and needs the right password', async () => {
     const db = loadedDb();
-    const file = createBackup(db, 'correct horse battery');
+    const file = await createBackup(db, 'correct horse battery');
     expect(isEncryptedBackup(file)).toBe(true);
-    expect(file.includes(Buffer.from('SQLite format 3'))).toBe(false);
-    expect(file.includes(Buffer.from('TRADER JOE'))).toBe(false); // no readable transaction data
-    expect(() => prepareRestore(file)).toThrow(/password/);
-    expect(() => prepareRestore(file, 'wrong password')).toThrow(/Wrong password/);
-    const { tmpPath, info } = prepareRestore(file, 'correct horse battery');
+    expect(has(file, 'SQLite format 3')).toBe(false);
+    expect(has(file, 'TRADER JOE')).toBe(false); // no readable transaction data
+    await expect(readBackup(file)).rejects.toThrow(/password/);
+    await expect(readBackup(file, 'wrong password')).rejects.toThrow(/Wrong password/);
+    const { info } = await readBackup(file, 'correct horse battery');
     expect(info.transactions).toBe(count(db));
-    fs.rmSync(tmpPath);
   });
 
-  it('B-03: rejects files that are not WalletWhisper backups, or are from a newer version', () => {
-    expect(() => prepareRestore(Buffer.from('hello'))).toThrow(/isn't a WalletWhisper backup/);
-    const other = path.join(os.tmpdir(), `ww-other-${process.pid}.db`);
-    const o = new Database(other);
-    o.exec('CREATE TABLE notes (x)');
-    o.close();
-    expect(() => prepareRestore(fs.readFileSync(other))).toThrow(/doesn't contain WalletWhisper data/);
-    const newer = path.join(os.tmpdir(), `ww-newer-${process.pid}.db`);
-    const n = new Database(newer);
-    n.exec('CREATE TABLE transactions (x); CREATE TABLE accounts (x); CREATE TABLE imports (x); CREATE TABLE categories (x);');
-    n.pragma('user_version = 999');
-    n.close();
-    expect(() => prepareRestore(fs.readFileSync(newer))).toThrow(/newer WalletWhisper/);
-    fs.rmSync(other); fs.rmSync(newer);
+  it('B-03: rejects files that are not WalletWhisper backups, or are from a newer version', async () => {
+    await expect(readBackup(new TextEncoder().encode('hello'))).rejects.toThrow(/isn't a WalletWhisper backup/);
+    const other = new Db();
+    other.exec('CREATE TABLE notes (x)');
+    await expect(readBackup(other.export())).rejects.toThrow(/doesn't contain WalletWhisper data/);
+    const newer = new Db();
+    newer.exec('CREATE TABLE transactions (x); CREATE TABLE accounts (x); CREATE TABLE imports (x); CREATE TABLE categories (x);');
+    newer.pragma('user_version = 999');
+    await expect(readBackup(newer.export())).rejects.toThrow(/newer WalletWhisper/);
+  });
+
+  it('B-04: opens password-protected backups made by the earlier desktop version', async () => {
+    // Exactly how the desktop version (Node crypto) wrote them
+    const data = Buffer.from(loadedDb().export());
+    const salt = nodeCrypto.randomBytes(16);
+    const iv = nodeCrypto.randomBytes(12);
+    const key = nodeCrypto.scryptSync('moving day 2026'.normalize('NFKC'), salt, 32, { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+    const cipher = nodeCrypto.createCipheriv('aes-256-gcm', key, iv);
+    const payload = Buffer.concat([cipher.update(data), cipher.final()]);
+    const header = { app: 'WalletWhisper', format: 1, createdAt: '2026-10-01T00:00:00Z', encrypted: true,
+      salt: salt.toString('base64'), iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64') };
+    const file = Buffer.concat([Buffer.from('WALLETWHISPER-BACKUP 1\n'), Buffer.from(JSON.stringify(header) + '\n'), payload]);
+    const { info } = await readBackup(new Uint8Array(file), 'moving day 2026');
+    expect(info.transactions).toBe(count(loadedDb()));
+    // ...and the desktop version's own data file (app.db) can be restored directly
+    expect((await readBackup(new Uint8Array(data))).info.transactions).toBe(info.transactions);
   });
 });
 
 describe('Moving to another computer through the app', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'walletwhisper-move-'));
-  const savedEnv = { db: process.env.SPENDING_DB_PATH, cfg: process.env.WALLETWHISPER_CONFIG };
-  let app: any;
-  let token: string;
-  const post = (url: string) => request(app).post(url).set('X-App-Token', token);
+  const host = memoryHost();
+  const api = client(new LocalApi(host, null));
+  const backupOf = (r: { body: { bytes: Uint8Array } }) => ({ name: 'b.wwbackup', bytes: r.body.bytes });
 
-  beforeAll(async () => {
-    delete process.env.SPENDING_DB_PATH;
-    process.env.WALLETWHISPER_CONFIG = path.join(root, 'config.json'); // this file's own settings
-    resetDbInstance();
-    app = await createServer();
-    token = (await request(app).get('/api/session')).body.token;
-    await post('/api/setup').send({ folder: path.join(root, 'computer-a') });
-  });
+  it('M-09: a new computer can restore a backup instead of starting empty', async () => {
+    const other = client(new LocalApi(memoryHost(), null));
+    await other.post('/api/setup');
+    await other.post('/api/imports', { files: [fixtureFile(CREDIT)], choices: '{}' });
+    const file = backupOf(await other.post('/api/backup/export', {}));
 
-  afterAll(() => {
-    resetDbInstance();
-    process.env.SPENDING_DB_PATH = savedEnv.db;
-    process.env.WALLETWHISPER_CONFIG = savedEnv.cfg;
-    fs.rmSync(root, { recursive: true, force: true });
+    const fresh = client(new LocalApi(memoryHost(), null));
+    expect((await fresh.post('/api/backup/restore', { files: [file] })).status).toBe(200);
+    expect((await fresh.get('/api/transactions?kind=all')).body.count).toBe(6);
   });
 
   it('M-10: export, then restore replaces the data (after confirming) and keeps a copy of the old data', async () => {
-    await post('/api/imports').attach('files', path.resolve(__dirname, 'fixtures', CREDIT)).field('choices', '[{}]');
-    const before = (await request(app).get('/api/transactions?kind=all')).body.count;
+    await api.post('/api/setup');
+    await api.post('/api/imports', { files: [fixtureFile(CREDIT)], choices: '{}' });
+    const before = (await api.get('/api/transactions?kind=all')).body.count;
     expect(before).toBeGreaterThan(0);
 
-    const exported = await post('/api/backup/export').send({ password: 'moving day 2026' }).buffer(true)
-      .parse((res, cb) => { const chunks: Buffer[] = []; res.on('data', c => chunks.push(c)); res.on('end', () => cb(null, Buffer.concat(chunks))); });
+    const exported = await api.post('/api/backup/export', { password: 'moving day 2026' });
     expect(exported.status).toBe(200);
-    expect(exported.headers['content-disposition']).toMatch(/walletwhisper-backup-.*\.wwbackup/);
-    const file: Buffer = exported.body;
+    expect(exported.body.filename).toMatch(/walletwhisper-backup-.*\.wwbackup/);
+    expect((await api.post('/api/backup/export', { password: 'short' })).status).toBe(400);
+    const file = backupOf(exported);
 
     // Change the data, then bring the backup back
-    await post('/api/imports').attach('files', path.resolve(__dirname, 'fixtures', CHECKING)).field('choices', '[{}]');
-    expect((await request(app).get('/api/transactions?kind=all')).body.count).toBeGreaterThan(before);
+    await api.post('/api/imports', { files: [fixtureFile(CHECKING)], choices: '{}' });
+    expect((await api.get('/api/transactions?kind=all')).body.count).toBeGreaterThan(before);
 
-    const inspect = await post('/api/backup/inspect').attach('file', file, 'b.wwbackup');
-    expect(inspect.body).toEqual({ needsPassword: true });
-    const looked = await post('/api/backup/inspect').attach('file', file, 'b.wwbackup').field('password', 'moving day 2026');
+    expect((await api.post('/api/backup/inspect', { files: [file] })).body).toEqual({ needsPassword: true });
+    const looked = await api.post('/api/backup/inspect', { files: [file], password: 'moving day 2026' });
     expect(looked.body.info.transactions).toBe(before);
 
-    const unconfirmed = await post('/api/backup/restore').attach('file', file, 'b.wwbackup').field('password', 'moving day 2026');
+    const unconfirmed = await api.post('/api/backup/restore', { files: [file], password: 'moving day 2026' });
     expect(unconfirmed.status).toBe(400);
-    const restored = await post('/api/backup/restore').attach('file', file, 'b.wwbackup')
-      .field('password', 'moving day 2026').field('confirm', 'REPLACE');
+    const restored = await api.post('/api/backup/restore', { files: [file], password: 'moving day 2026', confirm: 'REPLACE' });
     expect(restored.status).toBe(200);
-    expect((await request(app).get('/api/transactions?kind=all')).body.count).toBe(before);
+    expect((await api.get('/api/transactions?kind=all')).body.count).toBe(before);
 
     // Still fully manageable after restoring
-    expect((await post('/api/people').send({ name: 'After Restore' })).status).toBe(200);
-    const saved = fs.readdirSync(path.join(root, 'computer-a', 'backups')).filter(f => f.startsWith('before-restore'));
-    expect(saved).toHaveLength(1);
+    expect((await api.post('/api/people', { name: 'After Restore' })).status).toBe(200);
+    expect(host.snapshots.filter(s => s === 'before-restore')).toHaveLength(1);
   });
 
-  it("M-11: a backup that differs is compared first, then combined", async () => {
-    const binary = (r: any, cb: any) => { const c: Buffer[] = []; r.on("data", (x: Buffer) => c.push(x)); r.on("end", () => cb(null, Buffer.concat(c))); };
-    const file: Buffer = (await post("/api/backup/export").send({}).buffer(true).parse(binary)).body;
+  it('M-11: a backup that differs is compared first, then combined', async () => {
+    const file = backupOf(await api.post('/api/backup/export', {}));
     // After the backup was made, this computer imports more
-    await post("/api/imports").attach("files", path.resolve(__dirname, "fixtures", CHECKING)).field("choices", "[{}]");
-    const here = (await request(app).get("/api/transactions?kind=all")).body.count;
+    await api.post('/api/imports', { files: [fixtureFile(CHECKING)], choices: '{}' });
+    const here = (await api.get('/api/transactions?kind=all')).body.count;
 
-    const cmp = await post("/api/backup/compare").attach("file", file, "b.wwbackup");
+    const cmp = await api.post('/api/backup/compare', { files: [file] });
     expect(cmp.status).toBe(200);
     expect(cmp.body.preview.identical).toBe(false);
     expect(cmp.body.preview.localOnlyTransactions).toBeGreaterThan(0);
     expect(cmp.body.preview.newTransactions).toBe(0);
 
-    const merged = await post("/api/backup/merge").send({ compareId: cmp.body.compareId, choices: {}, removeLocalOnly: false });
+    const merged = await api.post('/api/backup/merge', { compareId: cmp.body.compareId, choices: {}, removeLocalOnly: false });
     expect(merged.body).toMatchObject({ success: true, added: 0, removed: 0 });
-    expect((await request(app).get("/api/transactions?kind=all")).body.count).toBe(here); // nothing lost
-    expect((await post("/api/backup/merge").send({ compareId: cmp.body.compareId })).status).toBe(400); // used up
+    expect((await api.get('/api/transactions?kind=all')).body.count).toBe(here); // nothing lost
+    expect(host.snapshots).toContain('before-merge');
+    expect((await api.post('/api/backup/merge', { compareId: cmp.body.compareId })).status).toBe(400); // used up
+  });
+
+  it('M-12: comparing a backup with identical data says so', async () => {
+    const file = backupOf(await api.post('/api/backup/export', {}));
+    const cmp = await api.post('/api/backup/compare', { files: [file] });
+    expect(cmp.body).toMatchObject({ compareId: null, preview: { identical: true } });
   });
 });

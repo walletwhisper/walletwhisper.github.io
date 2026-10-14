@@ -1,8 +1,5 @@
-import fs from 'fs';
-import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
 import type { Db } from './db.js';
-import { readConfig } from './config.js';
 import { UserError } from './errors.js';
 
 /**
@@ -60,36 +57,12 @@ export function detectProvider(key: string): AiProvider | null {
   return null;
 }
 
-/** Key saved in Settings, or LLM_API_KEY from .env / the environment (older setups). */
-function storedKey(): string {
-  const fromSettings = readConfig().aiKey;
-  if (fromSettings) return fromSettings;
-  if (process.env.LLM_API_KEY) return process.env.LLM_API_KEY;
-  try {
-    const env = fs.readFileSync(path.resolve(process.cwd(), '.env'), 'utf-8');
-    return env.match(/^\s*LLM_API_KEY\s*=\s*["']?([^"'\s]+)/m)?.[1] ?? '';
-  } catch {
-    return '';
-  }
-}
-
-/** Which provider is configured, for the Settings screen. Never returns the key itself. */
-export function aiStatus(): { provider: AiProvider | null; providerName: string | null; fromEnvFile: boolean } {
-  const key = storedKey();
-  const provider = detectProvider(key);
-  return {
-    provider,
-    providerName: provider ? PROVIDER_NAMES[provider] : null,
-    fromEnvFile: !!key && !readConfig().aiKey,
-  };
-}
-
-function getConfig(): LlmConfig {
-  const apiKey = storedKey().trim();
+function getConfig(key: string | null): LlmConfig {
+  const apiKey = (key ?? '').trim();
   if (!apiKey) throw new UserError('AI is not set up. Add an AI API key in Settings to use it.');
   const provider = detectProvider(apiKey);
   if (!provider) throw new UserError('The saved AI key is not a Claude, Gemini or OpenAI key. Replace it in Settings.');
-  return { provider, apiKey, model: process.env.LLM_MODEL || DEFAULT_MODELS[provider] };
+  return { provider, apiKey, model: DEFAULT_MODELS[provider] };
 }
 
 /** Strip reference numbers / IDs so nothing account-identifying is sent. */
@@ -144,7 +117,7 @@ function parseJson(text: string | undefined, who: string): any {
 }
 
 async function callClaude(cfg: LlmConfig, prompt: string, schema: object): Promise<any> {
-  const client = new Anthropic({ apiKey: cfg.apiKey, timeout: REQUEST_TIMEOUT_MS * 2, maxRetries: 1 });
+  const client = new Anthropic({ apiKey: cfg.apiKey, timeout: REQUEST_TIMEOUT_MS * 2, maxRetries: 1, dangerouslyAllowBrowser: true });
   try {
     const response = await client.beta.messages.create({
       model: cfg.model,
@@ -273,8 +246,8 @@ ${JSON.stringify(items)}`;
 /** Categories the AI may choose: spending categories only. */
 const NOT_FOR_AI = new Set(['Transfer', 'Income', 'Credit card (untracked)']);
 
-export async function recategorizeWithLlm(db: Db): Promise<AiRecategorizeResult> {
-  const cfg = getConfig();
+export async function recategorizeWithLlm(db: Db, apiKey: string | null): Promise<AiRecategorizeResult> {
+  const cfg = getConfig(apiKey);
 
   const cats = db.prepare('SELECT id, name FROM categories').all() as { id: number; name: string }[];
   const nameToId = new Map(cats.map(c => [c.name, c.id]));
@@ -381,8 +354,8 @@ function planSchema(categoryNames: string[]) {
  * Only the user's own question, today's date and the category names are sent. The AI returns
  * which period/categories/merchant the question is about; every number is computed locally.
  */
-export async function planQuestion(question: string, categoryNames: string[], today: string): Promise<QuestionPlan> {
-  const cfg = getConfig();
+export async function planQuestion(question: string, categoryNames: string[], today: string, apiKey: string | null): Promise<QuestionPlan> {
+  const cfg = getConfig(apiKey);
   const prompt = `You turn a household's question about their own spending into a structured query. You never see their data.
 
 Today is ${today}.

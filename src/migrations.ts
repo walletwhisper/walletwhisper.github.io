@@ -1,7 +1,5 @@
-import type Database from 'better-sqlite3';
+import type { Db } from './sqlite.js';
 import { DEFAULT_CATEGORIES } from './taxonomy.js';
-
-type Db = Database.Database;
 
 interface Migration {
   version: number;

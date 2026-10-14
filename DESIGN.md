@@ -1,20 +1,21 @@
-# WalletWhisper — Design Document (v4)
+# WalletWhisper — Design Document (v5)
 
-> **Status:** Phases 0–3 implemented (branch `v4-rework`) · Phase 4 (more banks) waits for real header rows · Phase 5 partly done (AI limited to spending categories) · **Runs:** localhost only
+> **Status:** Phases 0–3 implemented · Phase 4 (more banks) waits for real header rows · Phase 5 partly done (AI limited to spending categories) · **Runs:** entirely in the browser; published as a static site on GitHub Pages
 
 ### Implementation notes (where the code differs from the plan below)
+- **v5: runs in the browser, no server (§3).** The Express server is gone. The same engine runs in the page on SQLite compiled to WebAssembly, and data is saved in the browser (IndexedDB), with automatic copies, backup files and an optional folder copy. This lets the app be hosted for free on GitHub Pages while every user's data stays on their own computer.
 - **One-time items (§5.3) → "Show in charts".** Replaced by a per-transaction switch: sort Transactions by amount and untick anything to leave it out of every chart and total (stored in `is_one_time`). No threshold, no review question, no include toggle. Hidden totals are still shown so nothing silently disappears.
 - **Ask (new).** Overview and Trends have a question box. With the user's own AI key (Claude, Gemini or OpenAI, recognised from the key), only the question, today's date and category names are sent; the AI returns a period, categories, merchant and person (`src/llm.ts` `planQuestion`), and `src/ask.ts` computes the totals, previous-period and year-ago comparisons, 13-month trend and top merchants locally.
-- **Backup files (new).** Settings → Move to another computer exports one `.wwbackup` file (SQLite snapshot via `VACUUM INTO`, optionally AES-256-GCM with a scrypt-derived key) and restores it on another machine after checking integrity and schema version; the replaced data is saved to backups first. `src/backup.ts`.
+- **Backup files (new).** Settings → Back up or move to another computer exports one `.wwbackup` file (the SQLite database, optionally AES-256-GCM with a scrypt-derived key) and opens it on another computer or browser after checking integrity and schema version; a copy of the replaced data is kept first. `src/backup.ts`. Files from the desktop version, and its `app.db`, still open.
 - **Combining backups (new).** Restoring onto a computer that has data first compares them (`src/merge.ts`): rows matched by fingerprint / name / account key / rule pattern; one-sided edits flow automatically; fields changed differently on both sides (decisions, rules, account settings) are conflicts the user resolves, defaulting to the newer `decisions.updated_at`. Local-only transactions are kept unless the user removes them.
-- **Data folder and settings.** Chosen on first run (suggested `Documents/WalletWhisper`), movable in Settings. Data folder and AI key live in `~/.walletwhisper/config.json`, outside the project. An existing `data/` folder is adopted automatically.
-- **Soft delete → backups.** Undo import, reset and every migration take a full database snapshot in `data/backups/` first (plus one daily backup, 14 kept), instead of soft-delete columns. Simpler, and nothing to filter out of every query.
+- **Where data lives.** In the browser's storage for the site (IndexedDB), with the AI key. In Chrome/Edge the user can also choose a folder that gets a copy after every change (§3).
+- **Soft delete → automatic copies.** Undo import, reset, restore, combine and every migration keep a full copy of the database first (plus one a day), instead of soft-delete columns. Simpler, and nothing to filter out of every query.
 - **Balance check (§5.5) deferred.** Coverage (§5.4) already catches the realistic failure, missing statements; gaps inside a single export are rare. "Incomplete month" is based on coverage only.
 - **Category names:** "Fees" kept (not "Taxes & Fees"). Added Kids, Insurance, Gifts & Donations, Credit card (untracked). Transfer and Income are assigned from `kind`, never by keyword.
 - **Review inbox** groups unmatched transfers by payee (`payeeKey`), so one answer covers e.g. all 60+ payments to a card. Patterns can also be set on *imported* accounts, so payments for months whose statement isn't imported are still recognized (and show up as coverage gaps).
 - **P2P review** only asks about payments of $500 or more with a recognizable name; smaller P2P payments are spending unless the name is a household member's alias.
 - **Re-importing a file** refreshes each existing row's direction (exact from the CSV). It never downgrades a v0.1 row the AI had marked as a transfer; those go to review instead.
-- Tests: `SPENDING_DB_PATH=:memory:` (set in `vitest.config.ts`) so tests can never write to `data/app.db`; `SPENDING_BACKUP_DIR` redirects backups.
+- Tests run the engine and the in-page API in Node with in-memory databases (`tests/helpers.ts` `memoryHost`), so they never touch real data.
 
 ### What changed from v3
 - **New core section (§5): counting every dollar once.** Transfers are matched across accounts, accounts you don't import are listed, payments to cards you don't import follow a policy you choose, there is a coverage map and a monthly check, and uncertain items go to a review inbox.
@@ -65,46 +66,55 @@ OFX/QFX import · generic column mapper (LLM-assisted) · merchant-level LLM cat
 
 ## 3. Architecture
 
+WalletWhisper is a static website: the browser downloads the app once, and everything after that happens inside the page. There is no server, so there is nowhere for anyone's data to go.
+
 ```mermaid
 flowchart LR
-    subgraph Browser ["Browser: React 19 + Vite + Tailwind 4 + Recharts 3"]
-        Overview["Overview"]
-        Trends["Trends"]
-        Table["Transactions"]
-        Review["Review inbox"]
-        Accounts["Accounts + coverage"]
+    subgraph Page ["The page (React 19 + Vite + Tailwind 4 + Recharts 3)"]
+        Screens["Overview · Trends · Transactions · Review · Accounts · Settings"]
+        API["In-page API (src/app.ts)"]
+        Engine["Import → match transfers → classify → reports"]
+        SQL[("SQLite in WebAssembly (sql.js)")]
     end
+    IDB[("Browser storage (IndexedDB): data, automatic copies, AI key")]
+    Folder[("Optional folder copy (Chrome/Edge)")]
+    AI["AI provider (only with the user's key, only when asked)"]
 
-    subgraph Server ["Node.js + Express on 127.0.0.1:8000"]
-        Guard["Request guard (Host/Origin + token)"]
-        Import["Import: profile → account → parse → dedup"]
-        Match["Transfer matcher"]
-        Classify["Classifier"]
-        Checks["Coverage + monthly check"]
-        API["REST API"]
-    end
-
-    DB[("SQLite: data/app.db")]
-
-    Browser --> Guard --> API
-    API --> Import --> Match --> Classify --> DB
-    DB --> Checks --> API
+    Screens --> API --> Engine --> SQL
+    SQL -- "saved 0.3 s after each change" --> IDB
+    SQL -. "copy" .-> Folder
+    API -. "question + category names" .-> AI
 ```
+
+- **Same engine, same routes.** The screens still call `/api/...` routes, but `client/src/api.ts` hands them to `LocalApi` (`src/app.ts`) in the page instead of sending them over the network. The engine in `src/` is shared by the page and the tests.
+- **SQLite in WebAssembly.** `src/sqlite.ts` wraps sql.js in the small synchronous API the engine already used (`prepare/run/get/all`, `exec`, `pragma`, `transaction` with savepoints), so the engine code didn't change.
+- **Saving.** After each change the whole database is exported and written to IndexedDB in one transaction. A failed or interrupted write leaves the previous copy intact, which avoids the corruption risk that ruled out sql.js when it wrote to a file on disk. Data is also saved when the tab is hidden or closed.
+- **One tab at a time.** A Web Lock (`navigator.locks`) lets only one tab open the data, so two tabs can't overwrite each other.
+- **Automatic copies** (IndexedDB `snapshots`): one a day (7 kept), and one before each undo, reset, restore, combine or schema upgrade (10 kept). Each can be downloaded from Settings.
+- **Optional folder copy.** In Chrome and Edge the user can pick a folder (File System Access API). `WalletWhisper data.db` there is rewritten after every change. Browsers ask for permission again after a restart, so a banner offers **Reconnect**. On a new browser, choosing the same folder opens the data in it.
+- **Backup reminder.** If there's no folder copy and no backup file in 30 days (starting 3 days after the first import), a dismissible banner suggests downloading one.
+- **Content Security Policy.** The built page carries a CSP meta tag (`client/vite.config.ts`): scripts only from the site itself (plus WebAssembly), `connect-src` limited to the site and the three AI APIs, no forms, no plugins. The browser enforces it, so even a bug can't send data elsewhere.
 
 ### Stack
 | Layer | Choice | Notes |
 | :--- | :--- | :--- |
-| Backend | Node.js, Express 5, TypeScript (run with `tsx`) | One process serves the API and the built client |
-| Database | SQLite via **better-sqlite3** (WAL mode) | **Change:** replaces sql.js. sql.js keeps the DB in memory and rewrites the whole file on every save, so a crash mid-write can corrupt it. Remove the unused dependency |
-| CSV parsing | `csv-parse/sync` | Handles Chase's trailing comma |
-| Frontend | React 19, Vite, Tailwind 4, Recharts 3, lucide-react | |
-| Tests | Vitest + Supertest; Playwright for end-to-end later | |
+| App | React 19, Vite 8, Tailwind 4, Recharts 3, lucide-react | Built to static files (`client/dist`) with relative paths, so it works at any address |
+| Engine | TypeScript in `src/` | Runs in the page; tested in Node |
+| Database | SQLite via **sql.js** 1.14 (WebAssembly) | Saved to IndexedDB, not a file |
+| CSV parsing | `csv-parse` (browser build) | Handles Chase's trailing comma |
+| Hashing / encryption | `@noble/hashes` (SHA-256 fingerprints, scrypt), WebCrypto AES-256-GCM | Same fingerprints and backup format as the desktop version |
+| AI | `@anthropic-ai/sdk` (browser mode), `fetch` for Gemini and OpenAI | All three allow browser requests (CORS) |
+| Tests | Vitest (engine + in-page API, in Node) | Browser walkthroughs run with Playwright against the built site |
+| Hosting | GitHub Pages (`.github/workflows/pages.yml`) | Publishes only after the privacy check and tests pass |
 
 ### Running locally
-- `npm start` runs the server at `http://127.0.0.1:8000` and opens the browser.
-- `npm run build:client` must run after frontend changes, or the server serves the old build.
-- `npm run dev:server` + `npm run dev:client` for development with hot reload.
+- `npm start` builds the app and opens it at `http://localhost:8000`.
+- `npm run dev` starts Vite with hot reload.
 - `npm test` runs Vitest.
+- Data saved at `localhost:8000` is separate from data saved on the published site, because each address has its own browser storage. Move between them with a backup file.
+
+### Moving from the desktop version
+The earlier version kept `app.db` in a data folder. The new version opens that file directly: **I have a backup file** on the welcome screen, or Settings → **Open a backup file**. If the old app left a `-wal` file next to it, first combine them into one file (for example, open it with SQLite and run `VACUUM INTO`), because the browser reads only the main file.
 
 ---
 
@@ -420,59 +430,56 @@ Supporting tables:
 
 ## 10. API
 
+The routes run inside the page (`src/app.ts`), not over the network. Paths and request shapes are kept from the server version so the screens didn't change.
+
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
-| `POST` | `/api/imports/preview` | Multipart CSVs → per file: detected profile, account (or "ask"), date range, new / duplicate counts, matches found. Nothing is written |
-| `POST` | `/api/imports` | Commit previewed files (with the chosen account per file) |
-| `GET` | `/api/imports` | Import history |
-| `DELETE` | `/api/imports/:id` | Undo an import (soft delete, removes its transfer links) |
-| `GET` | `/api/summary?from&to&person&account&category&include_one_time` | KPIs, by category, by person, by account, by month, check status |
-| `GET` | `/api/trends?months&stack=category\|person\|account&…filters` | Monthly stacked series + per-month completeness |
-| `GET` | `/api/transactions?…filters&q&sort` | Filtered list + `{count, sum_cents}`; each row includes its transfer link |
-| `PATCH` | `/api/transactions/:id` | `{category_id?, person_id?, kind?, is_one_time?, remember?}` |
-| `PATCH` | `/api/transactions` | Bulk: `{ids:[…], person_id? , category_id?}` |
+| `GET` / `POST` | `/api/setup` | Is there data in this browser? / start fresh |
+| `POST` | `/api/imports/preview` | CSV files → per file: detected profile, account (or "ask"), date range, new / duplicate counts. Nothing is written |
+| `POST` | `/api/imports` | Import the previewed files (with the chosen account per file) |
+| `GET` / `DELETE` | `/api/imports`, `/api/imports/:id` | Import history / undo an import (a copy is kept first) |
+| `GET` | `/api/summary`, `/api/trends`, `/api/coverage` | Overview, Trends and coverage, with filters |
+| `GET` | `/api/transactions`, `/api/transactions/values` | Filtered, sorted list with totals / values for a column filter |
+| `PATCH` | `/api/transactions/:id`, `/api/transactions` | Edit one / many: category, person, kind, show in charts, remember |
 | `POST` / `DELETE` | `/api/transfer-links` | Link or unlink two rows manually |
-| `GET` | `/api/review` | Inbox items |
-| `POST` | `/api/review/:id` | Answer an item `{answer, remember}` |
-| `GET` / `POST` / `PATCH` | `/api/accounts` | Our accounts, including untracked ones, policies and patterns |
-| `GET` | `/api/coverage` | Per-account covered ranges and gaps |
-| `GET` / `POST` / `PATCH` | `/api/people` | People and their name variations |
-| `GET` | `/api/categories` | Names and colors |
-| `POST` | `/api/ai/recategorize` | Opt-in LLM pass (§12) |
-| `POST` | `/api/reset` | Requires the confirmation token (§11) |
+| `GET` / `POST` | `/api/review`, `/api/review/answer` | Review inbox |
+| `GET` / `POST` / `PATCH` / `DELETE` | `/api/accounts`, `/api/people`, `/api/rules`, `/api/person-rules` | Accounts, people, remembered rules |
+| `GET` / `PUT` | `/api/settings`, `/api/settings/ai` | Whether AI is on (never the key) / save or remove the key |
+| `POST` | `/api/ask`, `/api/ai/recategorize` | Opt-in AI (§12) |
+| `POST` | `/api/backup/export`, `/inspect`, `/compare`, `/merge`, `/restore` | Backup files and combining |
+| `POST` | `/api/reset` | Requires typing `DELETE ALL` |
 
 ---
 
 ## 11. Security & Privacy
 
-**Threat model:** a malicious website open in the same browser, a shared or lost computer, mistakes (accidental deletion), and data sent to an LLM provider.
+**Threat model:** the hosting site, other websites open in the same browser, a shared or lost computer, mistakes (accidental deletion), and data sent to an AI provider.
 
-| Risk | Fix | Phase |
-| :--- | :--- | :--- |
-| **Any website can call the local API.** `app.use(cors())` allows every origin, and binding to 127.0.0.1 doesn't stop the browser from sending requests | Remove `cors()` (the client is same-origin). Reject requests whose `Host` isn't `127.0.0.1:8000` / `localhost:8000` (prevents DNS rebinding) or whose `Origin` is foreign. Require a per-session token (in the served page, sent as a header) on every write | **0** |
-| Destructive endpoints (`/api/reset`, delete by date) | Typed confirmation in the UI plus a server-side confirmation token. Soft delete with a 30-day undo. `audit_log` entry | **0** |
-| DB corruption | better-sqlite3 + WAL; automatic backup before migrations and daily rotating backups (keep 14) in `data/backups/` | **0** |
-| Lost laptop / shared PC | Turn on BitLocker (recommended now). Optional app passphrase + SQLCipher encryption later | Docs now, v0.3 |
-| Malicious or huge CSV | 10 MB / 50k-row limit per file; strict parsing; CSV/Excel export escapes cells starting with `= + - @` | 1 |
-| LLM data exposure | §12 | 5 |
-| Secrets | `LLM_API_KEY` only in `.env` (git-ignored), read only by the server, never sent to the browser or logged | Built |
-| Personal data in the repo | `data/`, `*.db`, `*.csv`, `.env` are git-ignored; fixtures are anonymized; examples in docs are made up | Built |
-| Dependencies | Committed lockfiles, `npm audit` before releases, remove unused packages (`sql.js`, `cors`) | 0 |
-
-Raw CSVs are parsed in memory (multer `memoryStorage`) and never written to disk.
+| Risk | Fix |
+| :--- | :--- |
+| **The website could collect data.** | There is no server. GitHub Pages serves only the built files. Statements are read with the browser's file APIs and never sent. The CSP's `connect-src` allows only the site itself and the three AI APIs, so the page can't send data anywhere else even by mistake |
+| Other websites reading the data | Browser storage is private to each origin. Note: every GitHub Pages site of one GitHub user shares the origin `<user>.github.io`, so only the user's own sites share it. A custom domain or a separate account gives WalletWhisper its own origin |
+| Two tabs overwriting each other | Web Lock: the second tab shows "already open in another tab" |
+| Browser storage cleared or evicted | `navigator.storage.persist()` is requested; automatic copies; backup-file reminder; optional folder copy |
+| Destructive actions | Typed confirmation (`DELETE ALL` to reset, `ERASE` to erase the browser's data); a copy is kept before undo, reset, restore and combine; `audit_log` entry |
+| Lost laptop / shared PC | Turn on BitLocker / FileVault. Use a separate browser profile per person. Backup files can be password-protected (AES-256-GCM, scrypt) |
+| Malicious or huge CSV | 10 MB / 20 files per import / 50k rows per file; strict parsing |
+| AI data exposure | §12. The key is stored only in this browser and sent only to its provider |
+| Personal data in the repo | `data/`, `*.db`, `*.csv`, `*.wwbackup`, `.env` are git-ignored; the privacy check runs on commit, push, in CI and before every Pages publish; fixtures and docs use made-up data |
+| Dependencies | Committed lockfiles, exact versions for the core packages, no server dependencies left |
 
 ---
 
 ## 12. LLM Features (opt-in)
 
-The app works fully without an LLM. When a key is configured (`LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL` in `.env`; Gemini today, provider kept swappable):
+The app works fully without an LLM. When the user pastes their own key in Settings (Claude, Gemini or OpenAI, recognised from the key; stored only in their browser and sent only to that provider):
 
 | Feature | Sends | Guardrails |
 | :--- | :--- | :--- |
 | **Merchant categorization** (built, to be improved) | Cleaned merchant names only, **once per merchant** (cached), with the category list | Answer must be a category ID from the list; low confidence → review; never changes `kind`; never overwrites `manual` / `user_rule` |
 | **Column mapping for unknown CSVs** (v0.3) | Header row + 3 sample rows with amounts and names masked | User confirms the mapping; saved as a profile |
 | **Monthly summary text** (later) | Aggregates already computed by SQL | The LLM writes sentences only; every number comes from SQL |
-| **Chat** (later) | Question + category / person / account names | The LLM returns a **structured filter** (validated JSON), never SQL; the server runs parameterized queries |
+| **Chat** (later) | Question + category / person / account names | The LLM returns a **structured filter** (validated JSON), never SQL; the app runs parameterized queries in the page |
 
 **Privacy rules:**
 - A "what will be sent" preview appears before the first call of each feature.
@@ -571,7 +578,7 @@ Each fixture set has an `*.expected.json` file with the exact spending total, pe
 | :--- | :--- |
 | One-time threshold | $5,000 or > 3× typical month; suggestion only |
 | Do we need separate logins or private views per person? | No: one shared local view |
-| Will we use the app from a phone or another computer? | No: localhost only (web hosting needs auth + encryption; see §11) |
+| Will we use the app from a phone or another computer? | Another computer: yes, through backup files (combined if both have changes) or a folder copy. It is hosted as a static site with no server, so no sign-in is needed: each browser holds its own data. Phones: the site loads, but the screens are designed for a computer |
 | Splitting one transaction between people ("who owes whom") | Deferred; each row has one person (use "Shared" for joint spending) |
 
 ---

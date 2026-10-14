@@ -1,22 +1,24 @@
 import { useRef, useState } from 'react';
 import { Download, Laptop, Upload } from 'lucide-react';
 import { downloadBackup, sendBackup } from '../api';
+import { reloadWhenSaved } from '../local/engine';
 import type { BackupInfo, MergePreview, Summary } from '../api';
 import { MergeDialog } from './MergeDialog';
 import { useFetch, useStore } from '../store';
+import { markBackedUp } from '../SaveStatus';
 import { Button, Card, inputClass } from '../ui';
 
 /** Settings card: export everything to one file, or restore from a file made on another computer. */
 export function MoveData() {
   return (
-    <Card title={<span className="flex items-center gap-2"><Laptop className="w-4 h-4 text-accent" /> Move to another computer</span>}
-      subtitle="Take all your WalletWhisper data to another computer in one file, so you don't have to import your statements again.">
+    <Card title={<span className="flex items-center gap-2"><Laptop className="w-4 h-4 text-accent" /> Back up or move to another computer</span>}
+      subtitle="Save all your WalletWhisper data in one file: as a backup, or to open it on another computer or browser without importing your statements again.">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <ExportPart />
         <RestorePart />
       </div>
       <p className="text-xs text-muted mt-5">
-        The file holds all your transactions, people, accounts and choices. Your AI key and data folder stay on each computer.
+        The file holds all your transactions, people, accounts and choices. Your AI key is not included.
         Keep the file private, like a bank statement.
       </p>
     </Card>
@@ -32,9 +34,10 @@ function ExportPart() {
     setBusy(true);
     try {
       await downloadBackup(password);
+      markBackedUp();
       toast(password
         ? 'Backup downloaded and protected with your password. You will need the password to open it.'
-        : 'Backup downloaded. Copy it to the other computer and restore it there in Settings.');
+        : 'Backup downloaded. Keep it somewhere safe, or open it in WalletWhisper on another computer.');
       setPassword('');
     } catch (e: any) { toast(e.message); }
     finally { setBusy(false); }
@@ -42,7 +45,7 @@ function ExportPart() {
 
   return (
     <div className="space-y-3">
-      <p className="text-sm font-semibold text-ink">1. On this computer: save a backup file</p>
+      <p className="text-sm font-semibold text-ink">1. Save a backup file</p>
       <label className="block text-xs text-muted">
         Password (optional, recommended if the file goes through email or a cloud drive)
         <input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password"
@@ -97,7 +100,7 @@ function RestorePart() {
     try {
       await sendBackup('restore', file, password, true);
       toast('Backup restored.');
-      window.location.reload(); // every screen starts fresh with the restored data
+      await reloadWhenSaved(); // every screen starts fresh with the restored data
     } catch (e: any) { setError(e.message); setBusy(false); }
   };
 
@@ -105,7 +108,7 @@ function RestorePart() {
 
   return (
     <div className="space-y-3">
-      <p className="text-sm font-semibold text-ink">2. On the other computer: restore it</p>
+      <p className="text-sm font-semibold text-ink">2. Open a backup file</p>
       <input ref={input} type="file" accept=".wwbackup,.db" className="hidden"
         onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) { reset(); setFile(f); inspect(f, ''); } }} />
       {!file ? (
@@ -137,7 +140,7 @@ function RestorePart() {
                 </>
               ) : (
                 <>
-                  <p className="text-ink-2">There's no data on this computer yet, so the backup will simply be loaded.</p>
+                  <p className="text-ink-2">There's no data here yet, so the backup will simply be loaded.</p>
                   <Button variant="primary" onClick={restore} disabled={busy}>{busy ? 'Restoring…' : 'Load this backup'}</Button>
                 </>
               )}

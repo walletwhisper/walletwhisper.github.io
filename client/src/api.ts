@@ -1,38 +1,34 @@
-// Thin client for the local API. Every write sends the per-session token the server
-// hands only to its own page (see src/security.ts).
+// The screens talk to WalletWhisper through these calls. There is no server: each call is handled
+// inside this page by the engine in src/app.ts, using the data saved in this browser.
+import { ApiError } from '../../src/app';
+import type { UploadedFile } from '../../src/app';
+import { boot } from './local/engine';
 
-let tokenPromise: Promise<string> | null = null;
-
-function token(): Promise<string> {
-  tokenPromise ??= fetch('/api/session').then(r => r.json()).then(d => d.token as string);
-  return tokenPromise;
+async function toBody(body: unknown): Promise<Record<string, unknown> | undefined> {
+  if (!(body instanceof FormData)) return body as Record<string, unknown> | undefined;
+  const out: Record<string, unknown> = {};
+  const files: UploadedFile[] = [];
+  for (const [k, v] of body.entries()) {
+    if (v instanceof File) files.push({ name: v.name, bytes: new Uint8Array(await v.arrayBuffer()) });
+    else out[k] = v;
+  }
+  return { ...out, files };
 }
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (method !== 'GET') headers['X-App-Token'] = await token();
-  let payload: BodyInit | undefined;
-  if (body instanceof FormData) payload = body;
-  else if (body !== undefined) {
-    headers['Content-Type'] = 'application/json';
-    payload = JSON.stringify(body);
+  const started = await boot();
+  if (started.status !== 'ready') throw new Error('WalletWhisper is open in another tab.');
+  try {
+    return (await started.api.handle({ method, url, body: await toBody(body) })) as T;
+  } catch (err) {
+    if (err instanceof ApiError) throw new Error(err.message);
+    throw err;
   }
-  const res = await fetch(url, { method, headers, body: payload });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  return data as T;
 }
 
-/** Download the backup file (all data, optionally password-protected) and hand it to the browser to save. */
-export async function downloadBackup(password: string): Promise<void> {
-  const res = await fetch('/api/backup/export', {
-    method: 'POST',
-    headers: { 'X-App-Token': await token(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password: password || undefined }),
-  });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Export failed (${res.status})`);
-  const name = res.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] ?? 'walletwhisper-backup.wwbackup';
-  const url = URL.createObjectURL(await res.blob());
+/** Save a file the browser hands to the user (a backup they download). */
+export function saveFile(bytes: Uint8Array, name: string): void {
+  const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }));
   const a = Object.assign(document.createElement('a'), { href: url, download: name });
   document.body.appendChild(a);
   a.click();
@@ -40,9 +36,15 @@ export async function downloadBackup(password: string): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/** Download the backup file (all data, optionally password-protected). */
+export async function downloadBackup(password: string): Promise<void> {
+  const r = await request<{ filename: string; bytes: Uint8Array }>('POST', '/api/backup/export', { password: password || undefined });
+  saveFile(r.bytes, r.filename);
+}
+
 export interface BackupInfo { transactions: number; accounts: number; people: number; from: string | null; to: string | null }
 
-/** Send a backup file to the server: `inspect` only reads it, `restore` replaces the data. */
+/** Open a backup file: `inspect` only reads it, `compare` checks it against the data here, `restore` replaces the data. */
 export function sendBackup<T>(action: 'inspect' | 'restore' | 'compare', file: File, password: string, confirm = false): Promise<T> {
   const form = new FormData();
   form.append('file', file);
@@ -85,15 +87,12 @@ export const api = {
 };
 
 export interface Settings {
-  dataFolder: string | null;
   aiConfigured: boolean;
   aiProvider: string | null;
-  aiKeyInEnvFile: boolean;
 }
 
 export interface SetupInfo {
   configured: boolean;
-  suggestedFolder: string;
 }
 
 export function qs(params: Record<string, string | number | boolean | undefined | null>): string {

@@ -276,12 +276,12 @@ function DangerZone() {
   const act = useAction();
   const [text, setText] = useState('');
   return (
-    <Card title="Reset all data" subtitle="Deletes all transactions, imports, accounts and remembered choices. A backup is saved in your data folder first.">
+    <Card title="Reset all data" subtitle="Deletes all transactions, imports, accounts and remembered choices. A copy is kept first (Settings → Your data → Automatic copies).">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-ink-2">Type <b className="text-ink">DELETE ALL</b> to confirm:</span>
         <input className={`${inputClass} w-36`} value={text} onChange={e => setText(e.target.value)} />
         <Button variant="danger" disabled={text !== 'DELETE ALL'}
-          onClick={() => act(() => api.post<{ backup: string }>('/api/reset', { confirm: text }).then(r => { setText(''); return r; }), 'All data reset. A backup was saved first.')}>
+          onClick={() => act(() => api.post('/api/reset', { confirm: text }).then(r => { setText(''); return r; }), 'All data reset. A copy was kept first.')}>
           Reset
         </Button>
       </div>

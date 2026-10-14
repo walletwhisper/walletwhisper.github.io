@@ -1,8 +1,6 @@
-import Database from 'better-sqlite3';
 import type { Db } from './db.js';
-import { runMigrations } from './migrations.js';
 import { applyDecisions, parseList, recompute } from './ledger.js';
-import { getSetting, setSetting } from './db.js';
+import { getSetting, openDb, setSetting } from './db.js';
 
 /**
  * Combining a backup from another computer with the data on this one.
@@ -41,11 +39,9 @@ export interface MergePreview {
   conflicts: Conflict[];
 }
 
-/** Open a prepared backup copy, upgrading it in place if it came from an older version. */
-export function openBackupCopy(tmpPath: string): Database.Database {
-  const other = new Database(tmpPath);
-  runMigrations(other);
-  return other;
+/** Open a backup's database, upgrading it if it came from an older version. */
+export function openBackupCopy(data: Uint8Array): Db {
+  return openDb(data);
 }
 
 // ---------- matching helpers ----------
@@ -63,7 +59,7 @@ const accountKey = (a: AccountRow) =>
   a.last4 ? `${a.profile_id}|${a.last4}` : `${a.profile_id}|~${(a.nickname ?? a.bank).trim().toLowerCase()}`;
 const accountName = (a: AccountRow) => a.nickname || `${a.bank} ${a.account_type}${a.last4 ? ` ··${a.last4}` : ''}`;
 
-function lookups(db: Database.Database) {
+function lookups(db: Db) {
   const categories = db.prepare('SELECT id, name, color FROM categories').all() as { id: number; name: string; color: string }[];
   const people = db.prepare('SELECT id, name, color, aliases FROM people').all() as { id: number; name: string; color: string; aliases: string }[];
   const accounts = db.prepare('SELECT * FROM accounts').all() as AccountRow[];
@@ -99,7 +95,7 @@ function sameValue(col: string, mine: any, theirs: any, l: ReturnType<typeof loo
 
 // ---------- compare ----------
 
-export function compareWithBackup(live: Db, other: Database.Database): MergePreview {
+export function compareWithBackup(live: Db, other: Db): MergePreview {
   const l = lookups(live);
   const o = lookups(other);
 
@@ -211,7 +207,7 @@ export interface MergeOptions {
   removeLocalOnly: boolean;
 }
 
-export function mergeBackup(live: Db, other: Database.Database, opts: MergeOptions): { added: number; removed: number } {
+export function mergeBackup(live: Db, other: Db, opts: MergeOptions): { added: number; removed: number } {
   const o = lookups(other);
   const pick = (id: string): Side => opts.choices[id] ?? 'mine';
   let added = 0;

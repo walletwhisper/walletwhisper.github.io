@@ -1,23 +1,13 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { openDb, type Db } from '../src/db.js';
 import { finishImports, importCsvContent } from '../src/importer.js';
-import { createBackup, prepareRestore } from '../src/backup.js';
 import { compareWithBackup, mergeBackup, openBackupCopy } from '../src/merge.js';
 import { saveDecision } from '../src/ledger.js';
 
-// Every temporary backup copy a test opens is closed and deleted afterwards
-const opened: { db: { close(): void }; path: string }[] = [];
-function copyOf(a: Db) {
-  const tmpPath = prepareRestore(createBackup(a)).tmpPath;
-  const db = openBackupCopy(tmpPath);
-  opened.push({ db, path: tmpPath });
-  return db;
-}
-afterEach(() => {
-  for (const o of opened.splice(0)) { o.db.close(); fs.rmSync(o.path, { force: true }); }
-});
+/** The other computer's data, as it arrives in a backup file. */
+const copyOf = (a: Db) => openBackupCopy(a.export());
 
 const fixture = (name: string) => fs.readFileSync(path.resolve(__dirname, 'fixtures', name), 'utf8');
 const CREDIT = 'Chase1234_Activity_20261031.CSV';
