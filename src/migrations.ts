@@ -175,6 +175,7 @@ const MIGRATIONS: Migration[] = [
           WHEN kind = 'transfer' AND (
             UPPER(raw_description) LIKE '%FROM%' OR UPPER(raw_description) LIKE '%DEPOSIT%'
             OR UPPER(raw_description) LIKE '% CR %' OR UPPER(raw_description) LIKE 'MANUAL CR%'
+            OR UPPER(raw_description) LIKE '%CASHOUT%' OR UPPER(raw_description) LIKE '%REVERSAL%'
           ) THEN 'in'
           ELSE 'out'
         END;

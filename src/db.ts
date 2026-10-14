@@ -13,7 +13,7 @@ export function dbPath(): string {
 }
 
 export function backupDir(): string {
-  return path.resolve(process.cwd(), 'data', 'backups');
+  return process.env.SPENDING_BACKUP_DIR || path.resolve(process.cwd(), 'data', 'backups');
 }
 
 /** Open a database, enable WAL + foreign keys, and bring the schema up to date. */

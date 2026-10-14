@@ -8,7 +8,7 @@ import { bankRegistry } from '../src/registry.js';
 import { cleanMerchant } from '../src/cleaner.js';
 import { importCsvContent, finishImports, previewCsv } from '../src/importer.js';
 import { recompute } from '../src/ledger.js';
-import { answerReview, getReviewItems, extractP2PName, unlink } from '../src/review.js';
+import { answerReview, getReviewItems, extractP2PName, payeeKey, unlink } from '../src/review.js';
 import { getCoverage, getSummary, getTransactions } from '../src/reports.js';
 import { recategorizeWithLlm } from '../src/llm.js';
 
@@ -54,6 +54,12 @@ describe('Bank profiles and parsing', () => {
     expect(cleanMerchant('SQ *BLUE BOTTLE #12 SAN FRANCISCO CA')).toBe('Blue Bottle');
     expect(cleanMerchant('TST* SWEETGREEN 041 NEW YORK NY')).toBe('Sweetgreen');
     expect(cleanMerchant('AMAZON.COM*2A345 SEATTLE WA')).toBe('Amazon');
+  });
+
+  it('groups payments to the same payee despite reference numbers', () => {
+    expect(payeeKey('Fid Bkg Svc Llc Moneyline Z07452365 1qe11 Web Id: 1')).toBe(payeeKey('FID BKG SVC LLC MONEYLINE PPD ID: 2'));
+    expect(payeeKey('Target Card Srvc Bill Pay Web Id: T5')).toBe(payeeKey('TARGET CARD SRVC PAYMENT H WEB ID:'));
+    expect(payeeKey('Citi Autopay Payment')).not.toBe(payeeKey('Capital One Mobile Pmt'));
   });
 
   it('extracts the person name from P2P descriptions', () => {
@@ -343,18 +349,15 @@ describe('Migrating a v0.1 database', () => {
     `);
     old.close();
 
-    const backups = path.resolve(process.cwd(), 'data', 'backups');
-    const before = fs.existsSync(backups) ? fs.readdirSync(backups).length : 0;
+    const backups = path.join(dir, 'backups');
+    process.env.SPENDING_BACKUP_DIR = backups;
     const db = openDb(file);
     expect(db.pragma('user_version', { simple: true })).toBe(2);
     expect(db.prepare("SELECT direction, bank_kind FROM transactions WHERE fingerprint = 'fp1'").get()).toEqual({ direction: 'in', bank_kind: 'transfer' });
     expect(db.prepare("SELECT category_id FROM decisions WHERE fingerprint = 'fp2'").get()).toEqual({ category_id: 1 });
     expect(db.prepare("SELECT COUNT(*) AS n FROM categories WHERE name = 'Credit card (untracked)'").get()).toEqual({ n: 1 });
-    const after = fs.readdirSync(backups);
-    expect(after.length).toBe(before + 1);
-    // Clean up the backup this test created
-    const newest = after.filter(f => f.startsWith('pre-migration')).sort().pop()!;
-    fs.unlinkSync(path.join(backups, newest));
+    expect(fs.readdirSync(backups).filter(f => f.startsWith('pre-migration'))).toHaveLength(1);
+    delete process.env.SPENDING_BACKUP_DIR;
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });

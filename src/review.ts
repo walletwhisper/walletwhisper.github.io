@@ -50,12 +50,27 @@ export function commonPattern(descriptions: string[]): string {
     const w = split[0][i];
     if (split.every(s => s[i] === w)) out.push(w); else break;
   }
-  // Drop a trailing date-like or punctuation token
-  while (out.length > 1 && /^[\d/#:.-]+$/.test(out[out.length - 1])) out.pop();
-  return out.join(' ') || split[0].slice(0, 3).join(' ');
+  // Stop at reference numbers, dates and ACH id markers; keep plain 4-digit card endings
+  const cut = out.findIndex((w, i) => i >= 2 && (
+    /^(WEB|PPD|CCD|TEL|IAT)$/.test(w) || /[/#:]/.test(w) || (/\d/.test(w) && !/^\d{4}$/.test(w))
+  ));
+  const kept = cut >= 0 ? out.slice(0, cut) : out;
+  return kept.join(' ') || split[0].slice(0, 3).join(' ');
 }
 
-const NAME_STOP = new Set(['WEB', 'ID', 'ID:', 'PPD', 'CCD', 'PAYMENT', 'TRANSFER', 'ON', 'REF', 'CONF', 'TEL', 'IAT']);
+/**
+ * Groups payments to the same payee despite reference numbers:
+ * "FID BKG SVC LLC MONEYLINE Z0745 WEB ID:" and "FID BKG SVC LLC MONEYLINE PPD ID:" -> "FID BKG SVC".
+ */
+export function payeeKey(description: string): string {
+  const words = description.toUpperCase()
+    .split(/\b(?:WEB|PPD|CCD|TEL|IAT)\s+ID\b/)[0]
+    .split(/\s+/)
+    .filter(w => /^[A-Z&'.-]+$/.test(w) && !/^[.'-]+$/.test(w));
+  return words.slice(0, 3).join(' ') || description.toUpperCase().slice(0, 20);
+}
+
+const NAME_STOP =new Set(['WEB', 'ID', 'ID:', 'PPD', 'CCD', 'PAYMENT', 'TRANSFER', 'ON', 'REF', 'CONF', 'TEL', 'IAT']);
 
 /** The person's name in a P2P description: "Zelle payment from JANE DOE BAC123" -> "JANE DOE". */
 export function extractP2PName(description: string): string | null {
@@ -100,23 +115,24 @@ export function getReviewItems(db: Db): ReviewItem[] {
     });
   }
 
-  // 2. Transfers the bank flagged that we can't explain, grouped by merchant + direction
+  // 2. Transfers the bank flagged that we can't explain, grouped by payee + direction
   const unmatched = (db.prepare(`${TXN_SELECT}
     WHERE t.kind = 'transfer' AND t.transfer_via = 'bank' AND t.reviewed = 0
     ORDER BY t.txn_date DESC`).all() as TxnRow[]).filter(r => !inAmbiguous.has(r.id));
   const groups = new Map<string, TxnRow[]>();
   for (const r of unmatched) {
-    const key = `${r.merchant}|${r.direction}`;
+    const key = `${payeeKey(r.description)}|${r.direction}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(r);
   }
   for (const [key, rows] of groups) {
     const total = rows.reduce((s, r) => s + Math.abs(r.amountCents), 0);
     const dir = rows[0].direction as 'out' | 'in';
+    const pattern = commonPattern(rows.map(r => r.description));
     items.push({
       key: `transfer:${key}`,
       type: 'unmatched_transfer',
-      title: `${rows.length} transfer${rows.length > 1 ? 's' : ''} ${dir === 'out' ? 'out' : 'in'}: "${rows[0].merchant}"`,
+      title: `${rows.length} transfer${rows.length > 1 ? 's' : ''} ${dir === 'out' ? 'out' : 'in'}: "${pattern}"`,
       detail: dir === 'out'
         ? 'Money left this account, but no matching deposit was found in your imported accounts. Where did it go?'
         : 'Money arrived, but no matching withdrawal was found in your imported accounts. Where did it come from?',
@@ -124,7 +140,7 @@ export function getReviewItems(db: Db): ReviewItem[] {
       count: rows.length,
       totalCents: total,
       txns: rows.map(toReviewTxn),
-      suggestedPattern: commonPattern(rows.map(r => r.description))
+      suggestedPattern: pattern
     });
   }
 

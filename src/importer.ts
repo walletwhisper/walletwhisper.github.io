@@ -179,7 +179,9 @@ export function importCsvContent(db: Db, filename: string, csvText: string, choi
 
     const classify = createClassifier(db);
     const exists = db.prepare('SELECT id FROM transactions WHERE fingerprint = ?');
-    const refresh = db.prepare('UPDATE transactions SET direction = ?, bank_kind = ? WHERE id = ?');
+    // Re-import restores the exact direction; it may upgrade the bank's kind to 'transfer' but never
+    // downgrades one (v0.1 rows may carry a transfer judgment that the CSV alone can't reproduce)
+    const refresh = db.prepare("UPDATE transactions SET direction = ?, bank_kind = CASE WHEN ? = 'transfer' THEN 'transfer' ELSE bank_kind END WHERE id = ?");
     const insert = db.prepare(`
       INSERT INTO transactions (
         import_id, account_id, txn_date, raw_description, merchant, amount_cents, kind, bank_kind, direction,

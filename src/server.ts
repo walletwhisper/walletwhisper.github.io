@@ -351,6 +351,27 @@ export async function createServer() {
     res.json({ success: true });
   }));
 
+  // ---------- Remembered rules ----------
+  app.get('/api/rules', h((_req, res) => {
+    const category = db.prepare(`SELECT r.id, r.pattern, c.name AS target FROM rules r JOIN categories c ON c.id = r.category_id
+      WHERE r.source = 'user' ORDER BY r.pattern`).all();
+    const person = db.prepare(`SELECT r.id, r.pattern, p.name AS target FROM person_rules r JOIN people p ON p.id = r.person_id
+      ORDER BY r.pattern`).all();
+    res.json({ category, person });
+  }));
+
+  app.delete('/api/rules/:id', h((req, res) => {
+    db.prepare("DELETE FROM rules WHERE id = ? AND source = 'user'").run(idParam(req));
+    recompute(db);
+    res.json({ success: true });
+  }));
+
+  app.delete('/api/person-rules/:id', h((req, res) => {
+    db.prepare('DELETE FROM person_rules WHERE id = ?').run(idParam(req));
+    recompute(db);
+    res.json({ success: true });
+  }));
+
   // ---------- Settings ----------
   app.get('/api/settings', h((_req, res) => {
     res.json({ oneTimeThresholdCents: oneTimeThreshold(db), aiConfigured: hasLlmKey() });
