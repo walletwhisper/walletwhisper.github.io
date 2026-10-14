@@ -1,0 +1,3 @@
+# Made-up sample bank statements used by the tests (no real names, accounts or amounts).
+# The repo's own check (scripts/privacy-check.mjs) still scans their contents for your real data.
+tests/fixtures/
