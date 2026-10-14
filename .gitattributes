@@ -1,0 +1,4 @@
+# Git hooks and scripts must keep Unix line endings to run on macOS/Linux
+.githooks/* text eol=lf
+*.mjs text eol=lf
+*.yml text eol=lf
