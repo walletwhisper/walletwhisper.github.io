@@ -119,4 +119,23 @@ describe('Moving to another computer through the app', () => {
     const saved = fs.readdirSync(path.join(root, 'computer-a', 'backups')).filter(f => f.startsWith('before-restore'));
     expect(saved).toHaveLength(1);
   });
+
+  it("M-11: a backup that differs is compared first, then combined", async () => {
+    const binary = (r: any, cb: any) => { const c: Buffer[] = []; r.on("data", (x: Buffer) => c.push(x)); r.on("end", () => cb(null, Buffer.concat(c))); };
+    const file: Buffer = (await post("/api/backup/export").send({}).buffer(true).parse(binary)).body;
+    // After the backup was made, this computer imports more
+    await post("/api/imports").attach("files", path.resolve(__dirname, "fixtures", CHECKING)).field("choices", "[{}]");
+    const here = (await request(app).get("/api/transactions?kind=all")).body.count;
+
+    const cmp = await post("/api/backup/compare").attach("file", file, "b.wwbackup");
+    expect(cmp.status).toBe(200);
+    expect(cmp.body.preview.identical).toBe(false);
+    expect(cmp.body.preview.localOnlyTransactions).toBeGreaterThan(0);
+    expect(cmp.body.preview.newTransactions).toBe(0);
+
+    const merged = await post("/api/backup/merge").send({ compareId: cmp.body.compareId, choices: {}, removeLocalOnly: false });
+    expect(merged.body).toMatchObject({ success: true, added: 0, removed: 0 });
+    expect((await request(app).get("/api/transactions?kind=all")).body.count).toBe(here); // nothing lost
+    expect((await post("/api/backup/merge").send({ compareId: cmp.body.compareId })).status).toBe(400); // used up
+  });
 });

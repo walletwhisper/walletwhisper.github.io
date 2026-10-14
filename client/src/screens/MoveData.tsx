@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react';
 import { Download, Laptop, Upload } from 'lucide-react';
 import { downloadBackup, sendBackup } from '../api';
-import type { BackupInfo } from '../api';
-import { useStore } from '../store';
+import type { BackupInfo, MergePreview, Summary } from '../api';
+import { MergeDialog } from './MergeDialog';
+import { useFetch, useStore } from '../store';
 import { Button, Card, inputClass } from '../ui';
 
 /** Settings card: export everything to one file, or restore from a file made on another computer. */
@@ -65,6 +66,19 @@ function RestorePart() {
   const [info, setInfo] = useState<BackupInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [comparison, setComparison] = useState<{ compareId: string | null; preview: MergePreview } | null>(null);
+  // With data already here, a backup is compared first so nothing is overwritten without asking
+  const hasData = !!useFetch<Summary>('/api/summary').data?.dataRange.max;
+
+  const compare = async () => {
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setComparison(await sendBackup<{ compareId: string | null; preview: MergePreview }>('compare', file, password));
+    } catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
+  };
 
   const inspect = async (f: File, pw: string) => {
     setBusy(true);
@@ -116,14 +130,27 @@ function RestorePart() {
                 This backup has <b>{info.transactions.toLocaleString()} transactions</b>
                 {info.from && <> from {info.from} to {info.to}</>}, {info.accounts} account{info.accounts === 1 ? '' : 's'} and {info.people} {info.people === 1 ? 'person' : 'people'}.
               </p>
-              <p className="text-warn">It replaces the data on this computer. Your current data is saved in the backups folder first.</p>
-              <Button variant="primary" onClick={restore} disabled={busy}>{busy ? 'Restoring…' : 'Replace my data with this backup'}</Button>
+              {hasData ? (
+                <>
+                  <p className="text-ink-2">You already have data here. WalletWhisper will show what's different and let you combine the two or use the backup.</p>
+                  <Button variant="primary" onClick={compare} disabled={busy}>{busy ? 'Comparing…' : 'Compare with my data'}</Button>
+                </>
+              ) : (
+                <>
+                  <p className="text-ink-2">There's no data on this computer yet, so the backup will simply be loaded.</p>
+                  <Button variant="primary" onClick={restore} disabled={busy}>{busy ? 'Restoring…' : 'Load this backup'}</Button>
+                </>
+              )}
             </div>
           )}
           {busy && !info && <p className="text-xs text-muted">Checking the file…</p>}
         </div>
       )}
       {error && <p className="text-xs text-bad">{error}</p>}
+      {comparison && info && file && (
+        <MergeDialog compareId={comparison.compareId} preview={comparison.preview} info={info} file={file} password={password}
+          onClose={() => setComparison(null)} />
+      )}
     </div>
   );
 }

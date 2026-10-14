@@ -52,7 +52,18 @@ You don't need to import your statements again on a new computer.
 1. **On the old computer:** go to **Settings → Move to another computer** and choose **Download backup file**. The file holds all your transactions, people, accounts and choices. You can set a password to encrypt it (AES-256), which is a good idea if it goes through email or a cloud drive.
 2. **On the new computer:** install WalletWhisper. On the welcome screen, tick **Moving from another computer?** and choose the file. If WalletWhisper is already set up there, use **Settings → Restore from file** instead.
 
-After restoring, everything works as before, and you can keep importing and editing. Restoring replaces the data on that computer, but a copy of the previous data is saved in its backups folder first.
+After restoring, everything works as before, and you can keep importing and editing.
+
+**Going back and forth between computers.** If the computer you restore onto already has data, WalletWhisper compares the two first and shows what's different. You can then:
+- **Combine both (recommended).**
+  - Transactions, people, accounts and rules from either side are kept.
+  - Changes made on only one computer come across automatically.
+  - Where the same thing was changed differently on each computer, you choose per item: this computer's version or the backup's. The newer change is pre-selected, and there are "use newer / mine / backup for all" buttons.
+  - Transactions that exist only on this computer are kept unless you choose to remove them.
+- **Use the backup instead,** which replaces everything on this computer.
+- **Cancel,** which changes nothing.
+
+Either way, a copy of the computer's current data is saved in its backups folder first.
 
 Backup files (`.wwbackup`) are git-ignored and blocked by the privacy check. Your AI key and data folder aren't included, because they belong to each computer.
 

@@ -43,12 +43,37 @@ export async function downloadBackup(password: string): Promise<void> {
 export interface BackupInfo { transactions: number; accounts: number; people: number; from: string | null; to: string | null }
 
 /** Send a backup file to the server: `inspect` only reads it, `restore` replaces the data. */
-export function sendBackup<T>(action: 'inspect' | 'restore', file: File, password: string, confirm = false): Promise<T> {
+export function sendBackup<T>(action: 'inspect' | 'restore' | 'compare', file: File, password: string, confirm = false): Promise<T> {
   const form = new FormData();
   form.append('file', file);
   if (password) form.append('password', password);
   if (confirm) form.append('confirm', 'REPLACE');
   return request<T>('POST', `/api/backup/${action}`, form);
+}
+
+export interface MergeConflict {
+  id: string;
+  kind: 'transaction' | 'rule' | 'person_rule' | 'account';
+  title: string;
+  detail: string;
+  field: string;
+  mine: string;
+  theirs: string;
+  mineChangedAt: string | null;
+  theirsChangedAt: string | null;
+  suggested: 'mine' | 'theirs';
+}
+
+export interface MergePreview {
+  identical: boolean;
+  newTransactions: number;
+  localOnlyTransactions: number;
+  localOnlySample: { date: string; merchant: string; amountCents: number }[];
+  newPeople: string[];
+  newAccounts: string[];
+  newRules: number;
+  editsFromBackup: number;
+  conflicts: MergeConflict[];
 }
 
 export const api = {

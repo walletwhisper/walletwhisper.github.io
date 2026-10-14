@@ -4,6 +4,9 @@ import path from 'path';
 import fs from 'fs';
 import { audit, backupDb, currentDataFolder, Db, dbPath, getDb, isSetUp, resetDbInstance } from './db.js';
 import { backupFileName, createBackup, isEncryptedBackup, prepareRestore, swapInDatabase } from './backup.js';
+import { compareWithBackup, MergePreview, mergeBackup, openBackupCopy } from './merge.js';
+import crypto from 'crypto';
+import os from 'os';
 import { suggestedDataFolder, updateConfig } from './config.js';
 import { AccountChoice, backfillLast4, finishImports, importCsvContent, previewCsv, accountLabel } from './importer.js';
 import { aiStatus, detectProvider, planQuestion, PROVIDER_NAMES, recategorizeWithLlm } from './llm.js';
@@ -520,6 +523,61 @@ export async function createServer() {
     const { tmpPath, info } = prepareRestore(buffer, password);
     fs.rmSync(tmpPath, { force: true });
     res.json({ needsPassword: false, info });
+  }));
+
+  // Compare a backup with the data here, then combine them with the user's choices.
+  // The checked copy waits on disk (temp folder) between the two steps, for up to 30 minutes.
+  const pendingMerges = new Map<string, { tmpPath: string; created: number }>();
+  // Unpacked backups left behind if the app was closed mid-way hold real data: clear them at startup
+  // (only ones older than the 30-minute window, so another running copy's work in progress is left alone)
+  for (const f of fs.readdirSync(os.tmpdir()).filter(n => /^walletwhisper-(restore|export)-.*\.db$/.test(n))) {
+    const file = path.join(os.tmpdir(), f);
+    try {
+      if (Date.now() - fs.statSync(file).mtimeMs > 30 * 60_000) fs.rmSync(file, { force: true });
+    } catch { /* in use or already gone */ }
+  }
+  const dropPending = (id: string) => {
+    const p = pendingMerges.get(id);
+    if (p) fs.rmSync(p.tmpPath, { force: true });
+    pendingMerges.delete(id);
+  };
+
+  app.post('/api/backup/compare', backupUpload.single('file'), h((req, res) => {
+    for (const [id, p] of pendingMerges) if (Date.now() - p.created > 30 * 60_000) dropPending(id);
+    const { buffer, password } = backupFile(req);
+    const { tmpPath, info } = prepareRestore(buffer, password);
+    let preview: MergePreview;
+    try {
+      const other = openBackupCopy(tmpPath);
+      try { preview = compareWithBackup(db, other); } finally { other.close(); } // close before any delete (Windows)
+    } catch (err) {
+      fs.rmSync(tmpPath, { force: true });
+      throw err;
+    }
+    if (preview.identical) {
+      fs.rmSync(tmpPath, { force: true });
+      return res.json({ compareId: null, info, preview });
+    }
+    const compareId = crypto.randomBytes(12).toString('hex');
+    pendingMerges.set(compareId, { tmpPath, created: Date.now() });
+    res.json({ compareId, info, preview });
+  }));
+
+  app.post('/api/backup/merge', h((req, res) => {
+    const pending = pendingMerges.get(String(req.body?.compareId));
+    if (!pending) throw new BadRequest('That comparison has expired. Choose the backup file again.');
+    const choices: Record<string, 'mine' | 'theirs'> = {};
+    for (const [k, v] of Object.entries(req.body?.choices ?? {})) if (v === 'mine' || v === 'theirs') choices[k] = v;
+    const saved = backupDb(db, 'before-merge');
+    const other = openBackupCopy(pending.tmpPath);
+    try {
+      const result = mergeBackup(db, other, { choices, removeLocalOnly: req.body?.removeLocalOnly === true });
+      audit(db, 'backup_merged', { ...result, conflictsResolved: Object.keys(choices).length, previousDataSavedTo: saved });
+      res.json({ success: true, ...result });
+    } finally {
+      other.close();
+      dropPending(String(req.body.compareId));
+    }
   }));
 
   app.post('/api/backup/restore', backupUpload.single('file'), h((req, res) => {
