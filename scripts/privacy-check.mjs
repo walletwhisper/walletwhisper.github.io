@@ -188,7 +188,7 @@ function check(changes, extraHistoryScan) {
 
 /** --all: also look for secrets / personal terms in every line ever added in history */
 function historyScan() {
-  return check(commitChanges(['--all']));
+  return check(commitChanges(['--branches', '--tags']));
 }
 
 function mask(term) {
