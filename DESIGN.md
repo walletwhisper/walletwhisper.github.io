@@ -1,6 +1,15 @@
 # Spending Analyzer — Design Document (v4)
 
-> **Status:** v0.1 built (Chase checking + credit, dashboard, rules, Gemini categorization) · **This version:** re-plan around *counting every dollar once*, people, and visual tracking · **Runs:** localhost only
+> **Status:** Phases 0–3 implemented (branch `v4-rework`) · Phase 4 (more banks) waits for real header rows · Phase 5 partly done (AI limited to spending categories) · **Runs:** localhost only
+
+### Implementation notes (where the code differs from the plan below)
+- **Soft delete → backups.** Undo import, reset and every migration take a full database snapshot in `data/backups/` first (plus one daily backup, 14 kept), instead of soft-delete columns. Simpler, and nothing to filter out of every query.
+- **Balance check (§5.5) deferred.** Coverage (§5.4) already catches the realistic failure, missing statements; gaps inside a single export are rare. "Incomplete month" is based on coverage only.
+- **Category names:** "Fees" kept (not "Taxes & Fees"). Added Kids, Insurance, Gifts & Donations, Credit card (untracked). Transfer and Income are assigned from `kind`, never by keyword.
+- **Review inbox** groups unmatched transfers by payee (`payeeKey`), so one answer covers e.g. all 60+ payments to a card. Patterns can also be set on *imported* accounts, so payments for months whose statement isn't imported are still recognized (and show up as coverage gaps).
+- **P2P review** only asks about payments of $500 or more with a recognizable name; smaller P2P payments are spending unless the name is a household member's alias.
+- **Re-importing a file** refreshes each existing row's direction (exact from the CSV). It never downgrades a v0.1 row the AI had marked as a transfer; those go to review instead.
+- Tests: `SPENDING_DB_PATH=:memory:` (set in `vitest.config.ts`) so tests can never write to `data/app.db`; `SPENDING_BACKUP_DIR` redirects backups.
 
 ### What changed from v3
 - **New core section (§5): counting every dollar once.** Transfers are matched across accounts, accounts you don't import are listed, payments to cards you don't import follow a policy you choose, there is a coverage map and a monthly check, and uncertain items go to a review inbox.
