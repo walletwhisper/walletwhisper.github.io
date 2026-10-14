@@ -1,6 +1,6 @@
 # WalletWhisper — Design Document (v5)
 
-> **Status:** Phases 0–3 implemented · Phase 4 (more banks) waits for real header rows · Phase 5 partly done (AI limited to spending categories) · **Runs:** entirely in the browser; published as a static site on GitHub Pages
+> **Status:** Phases 0–3 implemented · Phase 4 (more banks) waits for real header rows · Phase 5 partly done (AI limited to spending categories) · **Runs:** entirely in the browser; published as a static site at https://walletwhisper.github.io/
 
 ### Implementation notes (where the code differs from the plan below)
 - **v5: runs in the browser, no server (§3).** The Express server is gone. The same engine runs in the page on SQLite compiled to WebAssembly, and data is saved in the browser (IndexedDB), with automatic copies, backup files and an optional folder copy. This lets the app be hosted for free on GitHub Pages while every user's data stays on their own computer.
@@ -458,7 +458,7 @@ The routes run inside the page (`src/app.ts`), not over the network. Paths and r
 | Risk | Fix |
 | :--- | :--- |
 | **The website could collect data.** | There is no server. GitHub Pages serves only the built files. Statements are read with the browser's file APIs and never sent. The CSP's `connect-src` allows only the site itself and the three AI APIs, so the page can't send data anywhere else even by mistake |
-| Other websites reading the data | Browser storage is private to each origin. Note: every GitHub Pages site of one GitHub user shares the origin `<user>.github.io`, so only the user's own sites share it. A custom domain or a separate account gives WalletWhisper its own origin |
+| Other websites reading the data | Browser storage is private to each origin (scheme + host + port; the path does not count). All GitHub Pages sites of one account share `<account>.github.io`, so WalletWhisper is published from its own organization, at `walletwhisper.github.io`, where no other site can read its storage |
 | Two tabs overwriting each other | Web Lock: the second tab shows "already open in another tab" |
 | Browser storage cleared or evicted | `navigator.storage.persist()` is requested; automatic copies; backup-file reminder; optional folder copy |
 | Destructive actions | Typed confirmation (`DELETE ALL` to reset, `ERASE` to erase the browser's data); a copy is kept before undo, reset, restore and combine; `audit_log` entry |

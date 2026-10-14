@@ -53,7 +53,7 @@ export function About() {
       <div className="mt-10 bg-surface rounded-card shadow-card p-7 text-center">
         <div className="text-[11px] font-semibold text-muted uppercase tracking-[0.6px] mb-2">Open source</div>
         <div className="text-[22px] font-bold tracking-tight">
-          <a className="text-accent hover:underline" href="https://github.com/XiaoLiu8811/financialTool" target="_blank" rel="noopener noreferrer">
+          <a className="text-accent hover:underline" href="https://github.com/walletwhisper/walletwhisper.github.io" target="_blank" rel="noopener noreferrer">
             Read every line on GitHub
           </a>
         </div>

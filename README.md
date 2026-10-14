@@ -4,7 +4,7 @@
 
 WalletWhisper turns the CSV statements you download from your banks into one clear picture of your spending: by month, by category, by person, and by account. It runs entirely in your web browser.
 
-**Use it:** https://xiaoliu8811.github.io/financialTool/ (nothing to install).
+**Use it:** https://walletwhisper.github.io/ (nothing to install).
 
 > ## 🔒 Your financial data stays on your computer
 >
@@ -36,7 +36,7 @@ WalletWhisper turns the CSV statements you download from your banks into one cle
 
 ## Getting started
 
-1. Open https://xiaoliu8811.github.io/financialTool/ in Chrome, Edge, Firefox or Safari on your computer.
+1. Open https://walletwhisper.github.io/ in Chrome, Edge, Firefox or Safari on your computer.
 2. Choose **Start**.
 3. Download CSV statements from your bank's website and drop them onto the page, or click **Import**.
 
@@ -74,7 +74,7 @@ Backup files (`.wwbackup`) are git-ignored and blocked by the privacy check. You
 You need [Node.js](https://nodejs.org) 22 or newer.
 
 ```bash
-git clone https://github.com/XiaoLiu8811/financialTool.git walletwhisper
+git clone https://github.com/walletwhisper/walletwhisper.github.io.git walletwhisper
 cd walletwhisper
 npm install
 npm start        # builds the app and opens it at http://localhost:8000
