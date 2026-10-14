@@ -9,7 +9,7 @@ import { aiStatus, detectProvider, planQuestion, PROVIDER_NAMES, recategorizeWit
 import { answerQuestion } from './ask.js';
 import { parseList, recompute, saveDecision } from './ledger.js';
 import { answerReview, getReviewItems, linkManually, pickColor, ReviewAnswer, setKindManually, unlink } from './review.js';
-import { getCoverage, getSummary, getTransactions, getTrends, parseFilters, StackBy } from './reports.js';
+import { FilterColumn, getColumnValues, getCoverage, getSummary, getTransactions, getTrends, parseFilters, StackBy } from './reports.js';
 import { requestGuard, RESET_CONFIRMATION, SESSION_TOKEN } from './security.js';
 
 import { UserError } from './errors.js';
@@ -169,6 +169,14 @@ export async function createServer() {
   app.get('/api/transactions', h((req, res) => {
     const kind = ['spending', 'transfer', 'income', 'all'].includes(String(req.query.kind)) ? String(req.query.kind) : 'spending';
     res.json(getTransactions(db, parseFilters(req.query), kind));
+  }));
+
+  // Values for an Excel-style column filter (merchant, account, person, category)
+  app.get('/api/transactions/values', h((req, res) => {
+    const kind = ['spending', 'transfer', 'income', 'all'].includes(String(req.query.kind)) ? String(req.query.kind) : 'spending';
+    const column = String(req.query.column);
+    if (!['merchant', 'account', 'person', 'category'].includes(column)) throw new BadRequest('Unknown column');
+    res.json({ values: getColumnValues(db, parseFilters(req.query), kind, column as FilterColumn) });
   }));
 
   // ---------- Editing transactions ----------

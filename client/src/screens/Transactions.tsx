@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpDown, Eye, EyeOff, Search, X, Link2, Sparkles, Users } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Eye, EyeOff, ListFilter, Search, X, Link2, Sparkles, Users } from 'lucide-react';
 import { api, qs } from '../api';
 import type { Settings, Summary, Txn, TxnList } from '../api';
 import { useFetch, useStore } from '../store';
 import { PRESETS, formatCents, monthEnd, monthLabel, presetRange, useRoute } from '../lib';
 import { Button, Card, Chip, Empty, Modal, Segmented, inputClass } from '../ui';
+import { FilterMenu } from '../FilterMenu';
 
 const KIND_TABS = [
   { id: 'spending', label: 'Spending' },
@@ -18,6 +19,17 @@ type SortColumn = 'date' | 'merchant' | 'account' | 'person' | 'category' | 'amo
 const DEFAULT_DIR: Record<SortColumn, 'asc' | 'desc'> = {
   date: 'desc', amount: 'desc', merchant: 'asc', account: 'asc', person: 'asc', category: 'asc',
 };
+
+type FilterColumn = 'merchant' | 'account' | 'person' | 'category';
+/** Address-bar parameter holding each column filter (merchant names are JSON; ids are comma lists) */
+const FILTER_PARAM: Record<FilterColumn, string> = { merchant: 'merch', account: 'acct', person: 'person', category: 'cat' };
+
+function readFilter(params: Record<string, string>, col: FilterColumn): string[] | null {
+  const raw = params[FILTER_PARAM[col]];
+  if (!raw) return null;
+  if (col !== 'merchant') return raw.split(',').filter(Boolean);
+  try { const list = JSON.parse(raw); return Array.isArray(list) ? list.map(String) : null; } catch { return null; }
+}
 
 const VIA_LABEL: Record<string, string> = {
   pair: 'Matched with',
@@ -46,10 +58,32 @@ export function Transactions() {
     return () => window.clearTimeout(t);
   }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { data } = useFetch<TxnList>(`/api/transactions${qs({
-    ...range, kind, categoryId: params.cat, personId: params.person, accountId: params.acct, q: params.q,
-    sort: params.sort, dir: params.dir, hidden: params.hidden,
-  })}`);
+  const query = {
+    ...range, kind, categoryIds: params.cat, personIds: params.person, accountIds: params.acct, merchants: params.merch,
+    q: params.q, hidden: params.hidden,
+  };
+  const { data } = useFetch<TxnList>(`/api/transactions${qs({ ...query, sort: params.sort, dir: params.dir })}`);
+
+  // Excel-style column filters: click the funnel (or right-click the header), search, tick, OK
+  const [openFilter, setOpenFilter] = useState<{ col: FilterColumn; anchor: DOMRect } | null>(null);
+  const applyFilter = (col: FilterColumn, values: string[] | null) => {
+    const value = values === null ? '' : col === 'merchant' ? JSON.stringify(values) : values.join(',');
+    set({ [FILTER_PARAM[col]]: value });
+    setOpenFilter(null);
+  };
+  const filters = {
+    merchant: readFilter(params, 'merchant'),
+    account: readFilter(params, 'account'),
+    person: readFilter(params, 'person'),
+    category: readFilter(params, 'category'),
+  };
+  const nameOf = (col: FilterColumn, v: string) =>
+    col === 'merchant' ? v
+    : col === 'category' ? categories.find(c => String(c.id) === v)?.name ?? '?'
+    : col === 'person' ? (v === 'none' ? 'Unassigned' : people.find(p => String(p.id) === v)?.name ?? '?')
+    : accounts.find(a => String(a.id) === v)?.label ?? '?';
+  const chipText = (col: FilterColumn, list: string[], plural: string) =>
+    list.length <= 2 ? list.map(v => nameOf(col, v)).join(', ') : `${list.length} ${plural}`;
 
   const [selected, setSelected] = useState<Set<number>>(new Set());
   useEffect(() => setSelected(new Set()), [data]);
@@ -60,9 +94,6 @@ export function Transactions() {
   const allSelected = rows.length > 0 && rows.every(r => selected.has(r.id));
   const selectedSum = useMemo(() => rows.filter(r => selected.has(r.id)).reduce((a, r) => a + r.amountCents, 0), [rows, selected]);
 
-  const cat = categories.find(c => String(c.id) === params.cat);
-  const person = params.person === 'none' ? { name: 'Unassigned', color: '#64748B' } : people.find(p => String(p.id) === params.person);
-  const acct = accounts.find(a => String(a.id) === params.acct);
 
   const setPerson = async (ids: number[], personId: number | null) => {
     try {
@@ -80,17 +111,28 @@ export function Transactions() {
   };
   const header = (col: SortColumn, label: string, align: 'left' | 'right' = 'left') => {
     const active = col === sortCol;
+    const filterCol = (['merchant', 'account', 'person', 'category'] as string[]).includes(col) ? col as FilterColumn : null;
+    const filtered = filterCol ? filters[filterCol] !== null : false;
+    const open = (el: Element) => filterCol && setOpenFilter({ col: filterCol, anchor: el.closest('th')!.getBoundingClientRect() });
     const Icon = !active ? ArrowUpDown : sortDir === 'asc' ? ArrowUp : ArrowDown;
     const hint = col === 'date' ? (sortDir === 'desc' && active ? 'oldest first' : 'newest first')
       : col === 'amount' ? (sortDir === 'desc' && active ? 'smallest first' : 'largest first')
       : (sortDir === 'asc' && active ? 'Z to A' : 'A to Z');
     return (
-      <th className={`px-3 py-3 ${align === 'right' ? 'text-right' : ''}`} aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <th className={`px-3 py-3 whitespace-nowrap ${align === 'right' ? 'text-right' : ''}`} aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+        onContextMenu={e => { if (filterCol) { e.preventDefault(); open(e.currentTarget); } }}>
         <button onClick={() => sortBy(col)} title={`Sort by ${label.toLowerCase()}: ${hint}`}
           className={`inline-flex items-center gap-1 uppercase tracking-wider cursor-pointer hover:text-ink ${active ? 'text-ink font-semibold' : ''} ${align === 'right' ? 'flex-row-reverse' : ''}`}>
           {label}
           <Icon className={`w-3 h-3 ${active ? 'text-accent' : 'opacity-40'}`} />
         </button>
+        {filterCol && (
+          <button onClick={e => open(e.currentTarget)} aria-label={`Filter ${label.toLowerCase()}`}
+            title={filtered ? `Filtered: click to change` : `Filter ${label.toLowerCase()} (or right-click the header)`}
+            className={`ml-1.5 align-middle p-0.5 rounded cursor-pointer ${filtered ? 'bg-accent text-white' : 'opacity-40 hover:opacity-100 hover:bg-fill'}`}>
+            <ListFilter className="w-3 h-3" />
+          </button>
+        )}
       </th>
     );
   };
@@ -135,15 +177,6 @@ export function Transactions() {
               {params.from && !params.month && <option value="">{params.from} – {params.to}</option>}
               {PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
-            <select className={inputClass} value={params.person || ''} onChange={e => set({ person: e.target.value })}>
-              <option value="">Everyone</option>
-              <option value="none">Unassigned</option>
-              {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <select className={inputClass} value={params.acct || ''} onChange={e => set({ acct: e.target.value })}>
-              <option value="">All accounts</option>
-              {accounts.filter(a => a.isTracked).map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
-            </select>
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-muted absolute left-2.5 top-2" />
               <input className={`${inputClass} pl-8 w-44`} placeholder="Search merchant…" value={search} onChange={e => setSearch(e.target.value)} />
@@ -156,14 +189,15 @@ export function Transactions() {
           </div>
         </div>
 
-        {(params.month || params.from || cat || person || acct || params.q || params.hidden) && (
+        {(params.month || params.from || Object.values(filters).some(Boolean) || params.q || params.hidden) && (
           <div className="flex flex-wrap gap-2 mt-3">
             {params.month && <Chip onClear={() => set({ month: '' })}>{monthLabel(params.month)}</Chip>}
             {params.from && !params.month && <Chip onClear={() => set({ from: '', to: '' })}>{params.from} – {params.to}</Chip>}
             {params.hidden && <Chip onClear={() => set({ hidden: '' })}>Hidden from charts</Chip>}
-            {cat && <Chip color={cat.color} onClear={() => set({ cat: '' })}>{cat.name}</Chip>}
-            {person && <Chip color={person.color} onClear={() => set({ person: '' })}>{person.name}</Chip>}
-            {acct && <Chip onClear={() => set({ acct: '' })}>{acct.label}</Chip>}
+            {filters.merchant && <Chip onClear={() => applyFilter('merchant', null)}>Merchant: {chipText('merchant', filters.merchant, 'merchants')}</Chip>}
+            {filters.account && <Chip onClear={() => applyFilter('account', null)}>Account: {chipText('account', filters.account, 'accounts')}</Chip>}
+            {filters.person && <Chip onClear={() => applyFilter('person', null)}>Person: {chipText('person', filters.person, 'people')}</Chip>}
+            {filters.category && <Chip onClear={() => applyFilter('category', null)}>Category: {chipText('category', filters.category, 'categories')}</Chip>}
             {params.q && <Chip onClear={() => set({ q: '' })}>"{params.q}"</Chip>}
           </div>
         )}
@@ -200,7 +234,7 @@ export function Transactions() {
             <thead className="bg-page text-muted uppercase tracking-wider border-b border-line">
               <tr>
                 <th className="pl-4 pr-1 py-3 w-8">
-                  <input type="checkbox" aria-label="Select all" checked={allSelected}
+                  <input type="checkbox" aria-label="Select all shown" title="Select every transaction shown (use the column filters first to narrow it down)" checked={allSelected}
                     onChange={() => setSelected(allSelected ? new Set() : new Set(rows.map(r => r.id)))} />
                 </th>
                 {header('date', 'Date')}
@@ -254,7 +288,7 @@ export function Transactions() {
                     {t.categorySource === 'manual' && <span className="ml-1 text-[10px] text-muted">edited</span>}
                     {t.categorySource === 'ai' && <span className="ml-1 text-[10px] text-[#5856D6]">AI</span>}
                   </td>
-                  <td className={`px-3 py-2.5 whitespace-nowrap text-right font-mono font-medium ${t.hidden ? 'text-muted line-through' : t.amountCents < 0 || (kind !== 'spending' && t.direction === 'in') ? 'text-good' : 'text-ink'}`}>
+                  <td className={`px-3 py-2.5 whitespace-nowrap text-right font-mono font-medium ${t.hidden ? 'text-muted line-through' : amountTone(t)}`}>
                     {t.kind === 'refund' ? `−${formatCents(Math.abs(t.amountCents))}` : formatCents(t.amountCents)}
                   </td>
                   {kind === 'spending' && (
@@ -285,8 +319,25 @@ export function Transactions() {
       </Card>
 
       {editing && <EditTxnDialog txn={editing} onClose={() => setEditing(null)} />}
+      {openFilter && (
+        <FilterMenu
+          key={openFilter.col}
+          title={{ merchant: 'Merchant', account: 'Account', person: 'Person', category: 'Category' }[openFilter.col]}
+          valuesUrl={`/api/transactions/values${qs({ ...query, column: openFilter.col })}`}
+          selected={filters[openFilter.col]}
+          anchor={openFilter.anchor}
+          onApply={values => applyFilter(openFilter.col, values)}
+          onClose={() => setOpenFilter(null)} />
+      )}
     </div>
   );
+}
+
+/** Money in (income, refunds, money arriving) is green; spending is red; transfers stay neutral. */
+function amountTone(t: Txn): string {
+  if (t.kind === 'income' || t.kind === 'refund' || t.amountCents < 0) return 'text-good';
+  if (t.kind === 'spend' || t.kind === 'fee') return 'text-bad';
+  return 'text-ink';
 }
 
 function EditTxnDialog({ txn, onClose }: { txn: Txn; onClose: () => void }) {

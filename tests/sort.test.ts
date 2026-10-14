@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { openDb } from '../src/db.js';
 import { finishImports, importCsvContent } from '../src/importer.js';
-import { getTransactions } from '../src/reports.js';
+import { getColumnValues, getTransactions, parseFilters } from '../src/reports.js';
 import type { SortColumn } from '../src/reports.js';
 
 const fixture = (name: string) => fs.readFileSync(path.resolve(__dirname, 'fixtures', name), 'utf8');
@@ -46,5 +46,40 @@ describe('Transactions list: click a column header to sort', () => {
     expect(names('desc')[0]).toBe('Ben');
     expect(names('asc').at(-1)).toBeNull();
     expect(names('desc').at(-1)).toBeNull();
+  });
+});
+
+describe('Transactions list: Excel-style column filters', () => {
+  it('F-10: keeps only the chosen merchants, and the menu offers values with counts', () => {
+    const merchants = getColumnValues(db, {}, 'all', 'merchant');
+    expect(merchants.length).toBeGreaterThan(2);
+    const [a, b] = merchants.filter(m => m.count > 0).slice(0, 2);
+    const rows = getTransactions(db, { merchants: [a.value, b.value] }, 'all').transactions;
+    expect(new Set(rows.map(r => r.merchant))).toEqual(new Set([a.value, b.value]));
+    expect(rows.length).toBe(a.count + b.count);
+    // The merchant menu still offers every merchant while a merchant filter is on
+    expect(getColumnValues(db, { merchants: [a.value] }, 'all', 'merchant').length).toBe(merchants.length);
+  });
+
+  it('F-11: a column filter narrows what the other columns offer', () => {
+    const one = getColumnValues(db, {}, 'all', 'merchant')[0];
+    const cats = getColumnValues(db, { merchants: [one.value] }, 'all', 'category');
+    expect(cats.reduce((n, c) => n + c.count, 0)).toBe(one.count);
+  });
+
+  it('F-12: person filter can include "Unassigned" alongside people', () => {
+    const people = getColumnValues(db, {}, 'all', 'person');
+    expect(people.at(-1)).toMatchObject({ value: 'none', label: 'Unassigned' });
+    const anna = people.find(p => p.label === 'Anna')!;
+    const rows = getTransactions(db, { personIds: [Number(anna.value), 'none'] }, 'all').transactions;
+    expect(rows.every(r => r.personName === 'Anna' || r.personName === null)).toBe(true);
+    expect(rows.some(r => r.personName === 'Anna')).toBe(true);
+  });
+
+  it('F-13: parses filters from the address bar and ignores junk', () => {
+    const f = parseFilters({ merchants: '["AMAZON","SHELL OIL"]', categoryIds: '3,x,5', personIds: 'none,2', accountIds: '' });
+    expect(f).toMatchObject({ merchants: ['AMAZON', 'SHELL OIL'], categoryIds: [3, 5], personIds: ['none', 2] });
+    expect(f.accountIds).toBeUndefined();
+    expect(parseFilters({ merchants: 'not json' }).merchants).toBeUndefined();
   });
 });

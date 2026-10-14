@@ -71,7 +71,7 @@ export function Overview() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Stat label="Spent" value={formatCents(s.totalSpend)} hint={`${s.totalTxnCount} transactions`} />
+        <Stat label="Spent" tone="bad" value={formatCents(s.totalSpend)} hint={`${s.totalTxnCount} transactions`} />
         <Stat
           label="vs. typical month"
           value={delta === null ? '—' : `${delta > 0 ? '▲' : delta < 0 ? '▼' : ''} ${Math.abs(delta)}%`}

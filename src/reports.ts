@@ -11,6 +11,11 @@ export interface Filters {
   categoryId?: number;
   personId?: number | 'none';
   accountId?: number;
+  /** Excel-style column filters on the transactions list: keep only these values (any of them) */
+  merchants?: string[];
+  categoryIds?: number[];
+  personIds?: (number | 'none')[];
+  accountIds?: number[];
   q?: string;
   /** Transactions list: column to sort by (default date) and direction (default depends on the column) */
   sort?: SortColumn;
@@ -48,7 +53,22 @@ export function parseFilters(q: Record<string, unknown>): Filters {
   const int = (k: string) => { const v = str(k); return v && /^\d+$/.test(v) ? Number(v) : undefined; };
   const date = (k: string) => { const v = str(k); return v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined; };
   const person = str('personId');
+  const ids = (k: string) => {
+    const list = (str(k) ?? '').split(',').filter(x => /^\d+$/.test(x)).map(Number);
+    return list.length ? list.slice(0, 500) : undefined;
+  };
+  const personList = (str('personIds') ?? '').split(',').filter(x => x === 'none' || /^\d+$/.test(x))
+    .map(x => (x === 'none' ? 'none' as const : Number(x)));
+  let merchants: string[] | undefined;
+  try {
+    const m = JSON.parse(str('merchants') ?? 'null');
+    if (Array.isArray(m)) merchants = m.filter((x): x is string => typeof x === 'string').slice(0, 500);
+  } catch { /* ignore malformed */ }
   return {
+    merchants: merchants?.length ? merchants : undefined,
+    categoryIds: ids('categoryIds'),
+    accountIds: ids('accountIds'),
+    personIds: personList.length ? personList.slice(0, 500) : undefined,
     from: date('from'),
     to: date('to'),
     month: str('month') && /^\d{4}-\d{2}$/.test(str('month')!) ? str('month') : undefined,
@@ -79,6 +99,20 @@ function buildWhere(f: Filters, skip: (keyof Filters)[] = []): Where {
     else { parts.push('t.person_id = ?'); params.push(f.personId); }
   }
   if (use('q')) { parts.push('(t.merchant LIKE ? OR t.raw_description LIKE ?)'); params.push(`%${f.q}%`, `%${f.q}%`); }
+  const inList = (col: string, values: unknown[]) => {
+    parts.push(`${col} IN (${values.map(() => '?').join(',')})`);
+    params.push(...values);
+  };
+  if (use('merchants')) inList('t.merchant', f.merchants!);
+  if (use('categoryIds')) inList('t.category_id', f.categoryIds!);
+  if (use('accountIds')) inList('t.account_id', f.accountIds!);
+  if (use('personIds')) {
+    const ids = f.personIds!.filter(x => x !== 'none');
+    const none = f.personIds!.includes('none');
+    const clauses = [...(ids.length ? [`t.person_id IN (${ids.map(() => '?').join(',')})`] : []), ...(none ? ['t.person_id IS NULL'] : [])];
+    parts.push(`(${clauses.join(' OR ')})`);
+    params.push(...ids);
+  }
   return { sql: parts.join(' AND '), params };
 }
 
@@ -103,7 +137,7 @@ export function getSummary(db: Db, f: Filters) {
     .get(...w.params) as { total: number; n: number };
   const hidden = db.prepare(`SELECT COALESCE(SUM(t.amount_cents), 0) AS total, COUNT(*) AS n FROM transactions t
     WHERE ${w.sql} AND ${SPENDING} AND ${hiddenFromCharts}`).get(...w.params) as { total: number; n: number };
-  const wIncome = buildWhere(f, ['categoryId']);
+  const wIncome = buildWhere(f, ['categoryId', 'categoryIds']);
   const moneyIn = (db.prepare(`SELECT COALESCE(SUM(t.amount_cents), 0) AS total FROM transactions t WHERE ${wIncome.sql} AND t.kind = 'income'`)
     .get(...wIncome.params) as { total: number }).total;
 
@@ -328,14 +362,47 @@ export function monthCompleteness(db: Db): Map<string, boolean> {
 
 // ---------- Transactions ----------
 
-export function getTransactions(db: Db, f: Filters, kind: string, limit = 2000) {
-  const w = buildWhere(f);
-  const kindClause =
-    kind === 'all' ? '' :
+function kindClause(kind: string): string {
+  return kind === 'all' ? '' :
     kind === 'transfer' ? " AND t.kind = 'transfer'" :
     kind === 'income' ? " AND t.kind = 'income'" :
     ` AND ${SPENDING}`;
-  const where = `${w.sql}${kindClause}${f.hiddenOnly ? ` AND ${hiddenFromCharts}` : ''}`;
+}
+
+export type FilterColumn = 'merchant' | 'account' | 'person' | 'category';
+
+/**
+ * The values a column filter offers, like Excel: what appears in the list under every *other*
+ * filter, with how many rows each has. Values already chosen for this column stay offered.
+ */
+export function getColumnValues(db: Db, f: Filters, kind: string, column: FilterColumn) {
+  const skip: Record<FilterColumn, (keyof Filters)[]> = {
+    merchant: ['merchants'], account: ['accountId', 'accountIds'], person: ['personId', 'personIds'], category: ['categoryId', 'categoryIds'],
+  };
+  const w = buildWhere(f, skip[column]);
+  const where = `${w.sql}${kindClause(kind)}${f.hiddenOnly ? ` AND ${hiddenFromCharts}` : ''}`;
+  const select: Record<FilterColumn, string> = {
+    merchant: `SELECT t.merchant AS value, t.merchant AS label, NULL AS color, COUNT(*) AS count
+      FROM transactions t WHERE ${where} GROUP BY t.merchant ORDER BY t.merchant COLLATE NOCASE`,
+    category: `SELECT c.id AS value, c.name AS label, c.color AS color, COUNT(*) AS count
+      FROM transactions t JOIN categories c ON c.id = t.category_id WHERE ${where} GROUP BY c.id ORDER BY c.name COLLATE NOCASE`,
+    person: `SELECT COALESCE(CAST(p.id AS TEXT), 'none') AS value, COALESCE(p.name, 'Unassigned') AS label, p.color AS color, COUNT(*) AS count
+      FROM transactions t LEFT JOIN people p ON p.id = t.person_id WHERE ${where} GROUP BY p.id ORDER BY p.name IS NULL, p.name COLLATE NOCASE`,
+    account: `SELECT a.id AS value, a.nickname, a.bank, a.account_type, a.last4, NULL AS color, COUNT(*) AS count
+      FROM transactions t JOIN accounts a ON a.id = t.account_id WHERE ${where} GROUP BY a.id ORDER BY COALESCE(a.nickname, a.bank) COLLATE NOCASE`,
+  };
+  const rows = db.prepare(select[column]).all(...w.params) as any[];
+  return rows.slice(0, 3000).map(r => ({
+    value: String(r.value),
+    label: column === 'account' ? accountLabel(r) : String(r.label),
+    color: r.color ?? null,
+    count: r.count,
+  }));
+}
+
+export function getTransactions(db: Db, f: Filters, kind: string, limit = 2000) {
+  const w = buildWhere(f);
+  const where = `${w.sql}${kindClause(kind)}${f.hiddenOnly ? ` AND ${hiddenFromCharts}` : ''}`;
 
   // The footer total counts only rows shown in charts, so it matches the chart slice that was clicked
   const agg = db.prepare(`
